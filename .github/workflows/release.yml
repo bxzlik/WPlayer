@@ -18,7 +18,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -58,7 +58,8 @@ jobs:
 
       # Готовая папка программы: WPlayer.exe, Qt, libmpv, yt-dlp, шейдеры
       - name: Install
-        run: cmake --install build --prefix dist
+        # Префикс — абсолютный: скрипт развёртывания Qt иначе падает на qt.conf
+        run: cmake --install build --prefix "$PWD/dist"
 
       - name: Package
         shell: pwsh

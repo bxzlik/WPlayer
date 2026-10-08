@@ -9,6 +9,11 @@ if(NOT MSVC)
     message(FATAL_ERROR "WPlayer собирается только MSVC (Visual Studio 2022 / Build Tools)")
 endif()
 
+# Плоская папка установки: WPlayer.exe и всё рядом. Задаётся до
+# qt_standard_project_setup() — тот сам подключает GNUInstallDirs и иначе
+# первым запишет в кэш bin.
+set(CMAKE_INSTALL_BINDIR "." CACHE STRING "Куда ставить WPlayer.exe относительно префикса")
+
 find_package(Qt6 6.7 REQUIRED COMPONENTS Gui Quick QuickControls2 OpenGL Network Svg)
 qt_standard_project_setup(REQUIRES 6.7)
 
@@ -175,7 +180,6 @@ endif()
 # Установка: cmake --install build --prefix dist
 # Плоская папка, как у обычной Windows-программы: WPlayer.exe и всё рядом.
 # ---------------------------------------------------------------------------
-set(CMAKE_INSTALL_BINDIR "." CACHE STRING "Куда ставить WPlayer.exe относительно префикса")
 include(GNUInstallDirs)
 
 install(TARGETS WPlayer RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
