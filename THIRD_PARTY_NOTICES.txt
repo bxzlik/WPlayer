@@ -1,0 +1,39 @@
+WPlayer — third-party components
+================================
+
+WPlayer itself is Copyright (c) 2026 bxzlik and is licensed under the GNU
+General Public License version 3 (see LICENSE.txt).
+Source code: https://github.com/bxzlik/WPlayer
+
+WPlayer is distributed together with the following components. Each of them
+remains under its own license.
+
+mpv / libmpv
+  https://mpv.io — https://github.com/mpv-player/mpv
+  The bundled libmpv-2.dll is a build by shinchiro/mpv-winbuild-cmake
+  (https://github.com/shinchiro/mpv-winbuild-cmake), configured with GPL
+  components, and is therefore distributed under the GNU General Public
+  License version 3 or later (it also includes FFmpeg, libplacebo and other
+  libraries under GPL/LGPL). Source code: see the links above.
+
+Qt 6
+  https://www.qt.io — The Qt Company Ltd. and other contributors.
+  Used under the GNU Lesser General Public License version 3 (LGPLv3),
+  dynamically linked. Source code: https://download.qt.io/official_releases/qt/
+
+yt-dlp
+  https://github.com/yt-dlp/yt-dlp — The Unlicense (public domain).
+
+Anime4K
+  https://github.com/bloc97/Anime4K — Copyright (c) 2019-2021 bloc97.
+  MIT License.
+
+Solar icon set
+  https://www.figma.com/community/file/1166831539721848736 — 480 Design.
+  Creative Commons Attribution 4.0 International (CC BY 4.0).
+  Icons were converted to SVG; some window-control icons are drawn separately.
+
+Inter typeface
+  https://github.com/rsms/inter — Copyright (c) 2016 The Inter Project Authors.
+  SIL Open Font License 1.1 (see qml/fonts/OFL.txt). The variable font was
+  converted to static Regular / Medium / Bold instances.

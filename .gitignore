@@ -1,0 +1,9 @@
+/build*/
+/dist/
+/out/
+/third_party/
+/shaders/
+/.vs/
+/.vscode/
+CMakeUserPresets.json
+*.user

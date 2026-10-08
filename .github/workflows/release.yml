@@ -1,0 +1,113 @@
+name: Release
+
+# Тег вида v1.2.3 → сборка, установщики и релиз на GitHub.
+# Ручной запуск из вкладки Actions собирает то же самое, но без релиза:
+# файлы остаются в артефактах прогона.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Версия берётся из CMakeLists.txt; тег обязан с ней совпадать,
+      # иначе в установщике и в «Приложениях» окажется не та версия.
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path CMakeLists.txt -Pattern 'project\(WPlayer VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") {
+            throw "Тег $env:GITHUB_REF_NAME не совпадает с версией в CMakeLists.txt (v$v)"
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Fetch libmpv, yt-dlp, Anime4K
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/fetch-deps.ps1
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWPLAYER_DEPLOY_QT=OFF "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build
+
+      # Готовая папка программы: WPlayer.exe, Qt, libmpv, yt-dlp, шейдеры
+      - name: Install
+        run: cmake --install build --prefix dist
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          New-Item -ItemType Directory -Force out | Out-Null
+
+          # Портативная версия
+          Compress-Archive -Path dist/* -DestinationPath "out/WPlayer-$v-portable.zip"
+
+          # Установщик .exe (NSIS)
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
+            $env:PATH = "${env:ProgramFiles(x86)}\NSIS;$env:PATH"
+          }
+          makensis /V2 "/DVERSION=$v" "/DSRC=$PWD\dist" "/DOUTFILE=$PWD\out\WPlayer-$v.exe" installer/WPlayer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis завершился с кодом $LASTEXITCODE" }
+
+          # Установщик .msi (CPack + WiX 3)
+          Invoke-WebRequest https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip -OutFile wix.zip
+          Expand-Archive wix.zip -DestinationPath wix
+          $env:PATH = "$PWD\wix;$env:PATH"
+          cpack -G WIX --config build/CPackConfig.cmake -B out/cpack
+          if ($LASTEXITCODE -ne 0) { throw "cpack завершился с кодом $LASTEXITCODE" }
+          Move-Item "out/cpack/WPlayer-$v.msi" out/
+
+          Get-ChildItem out -File | Format-Table Name, Length
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WPlayer ${{ github.ref_name }}
+          # Описание собирает сам GitHub (как кнопка «Generate release notes»):
+          # слитые pull request'ы с прошлого тега и ссылка на полный список изменений
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            out/WPlayer-*.exe
+            out/WPlayer-*.msi
+            out/WPlayer-*-portable.zip
+
+      - name: Upload artifacts
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WPlayer-${{ steps.version.outputs.version }}
+          path: |
+            out/WPlayer-*.exe
+            out/WPlayer-*.msi
+            out/WPlayer-*-portable.zip
