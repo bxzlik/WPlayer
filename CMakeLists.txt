@@ -99,6 +99,7 @@ set(WPLAYER_QML
     qml/History.qml
     qml/HistoryRow.qml
     qml/HistoryPanel.qml
+    qml/QueuePanel.qml
     qml/SettingCard.qml
     qml/Segmented.qml
     qml/ColorPicker.qml

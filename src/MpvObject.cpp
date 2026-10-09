@@ -4,6 +4,7 @@
 #include "MpvRenderThread.h"
 #include "YtDlp.h"
 
+#include <QCollator>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -18,9 +19,11 @@
 #include <QUrl>
 #include <QtDebug>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 // Общие данные элемента и рендерера. Колбэки mpv приходят из чужих потоков
@@ -174,15 +177,17 @@ MpvObject::MpvObject(QQuickItem* parent)
     if (mpv_initialize(handle) < 0)
         qFatal("mpv_initialize() failed");
 
-    m_defaultYtdlFormat = getProperty("ytdl-format").toString();
-
     static const char* const observed[] = {
         "idle-active", "media-title", "time-pos", "duration", "pause", "volume", "mute",
         "audio-delay", "paused-for-cache", "track-list", "aid", "sid", "demuxer-cache-time",
-        "speed", "chapter-list", "chapter",
+        "speed", "chapter-list", "chapter", "playlist", "playlist-pos",
     };
     for (const char* name : observed)
         mpv_observe_property(handle, 0, name, MPV_FORMAT_NODE);
+
+    // Раньше ytdl_hook (у него приоритет 10): он читает ytdl-format,
+    // который prepareFile ставит для пар «видео + аудио»
+    mpv_hook_add(handle, 0, "on_load", 5);
 
     mpv_set_wakeup_callback(
         handle, [](void* bridge) { static_cast<MpvBridge*>(bridge)->requestEvents(); }, m_bridge.get());
@@ -307,12 +312,17 @@ void MpvObject::handleEvent(const mpv_event& event)
         break;
     case MPV_EVENT_FILE_LOADED:
         setLoading(false);
-        if (!m_pendingExternalAudio.isEmpty()) {
-            selectExternalAudio(m_pendingExternalAudio);
-            m_pendingExternalAudio.clear();
-        }
+        if (!m_currentPairAudio.isEmpty())
+            selectExternalAudio(m_currentPairAudio);
         emit fileLoaded();
         break;
+    case MPV_EVENT_HOOK: {
+        const auto* hook = static_cast<const mpv_event_hook*>(event.data);
+        if (std::strcmp(hook->name, "on_load") == 0)
+            prepareFile();
+        mpv_hook_continue(m_mpv.get(), hook->id);
+        break;
+    }
     case MPV_EVENT_END_FILE: {
         const auto* end = static_cast<const mpv_event_end_file*>(event.data);
         if (end->reason == MPV_END_FILE_REASON_ERROR) {
@@ -366,6 +376,10 @@ void MpvObject::handlePropertyChange(const char* name, const QVariant& value)
         assign(this, m_audioDelay, value.toDouble(), &MpvObject::audioDelayChanged);
     } else if (std::strcmp(name, "speed") == 0) {
         assign(this, m_speed, value.isValid() ? value.toDouble() : 1.0, &MpvObject::speedChanged);
+    } else if (std::strcmp(name, "playlist") == 0) {
+        updatePlaylist(value.toList());
+    } else if (std::strcmp(name, "playlist-pos") == 0) {
+        assign(this, m_playlistPos, value.isValid() ? value.toInt() : -1, &MpvObject::playlistPosChanged);
     } else if (std::strcmp(name, "chapter-list") == 0) {
         updateChapters(value.toList());
     } else if (std::strcmp(name, "chapter") == 0) {
@@ -493,27 +507,55 @@ QString MpvObject::lastErrorSuffix() const
 // Загрузка
 // ---------------------------------------------------------------------------
 
-void MpvObject::prepareLoad(const QString& source, const QStringList& audioFiles, const QString& ytdlFormat)
+// Хук on_load: файл из очереди вот-вот откроется (через open, автопереход
+// или выбор в очереди). Всё, что зависит от файла, ставим здесь опциями
+// самого файла (file-local-options) — иначе они перешли бы на следующие.
+void MpvObject::prepareFile()
 {
     m_lastLogError.clear();
+    const QString path = getProperty("path").toString();
+    const QString audio = m_pairAudio.value(path);
+    m_currentPairAudio = audio;
+
+    auto setLocal = [this](const char* name, const QString& value) {
+        const QByteArray key = QByteArray("file-local-options/") + name;
+        mpv_set_property_string(m_mpv.get(), key.constData(), value.toUtf8().constData());
+    };
 
     // Многие CDN (например, за ddos-guard) отдают прямые ссылки только при
     // наличии Referer, а mpv по умолчанию его не шлёт. Для прямых ссылок на
     // медиафайл подставляем домен самой ссылки; страницы сайтов не трогаем —
     // для них нужные заголовки выставляет ytdl_hook.
-    const QUrl url(source);
-    const QString referrer = YtDlp::isMediaUrl(url)
-                                 ? url.adjusted(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment
-                                                | QUrl::RemoveUserInfo).toString() + QLatin1Char('/')
-                                 : QString();
-    mpv_set_property_string(m_mpv.get(), "referrer", referrer.toUtf8().constData());
+    const QUrl url(path);
+    if (YtDlp::isMediaUrl(url))
+        setLocal("referrer", url.adjusted(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment
+                                          | QUrl::RemoveUserInfo).toString() + QLatin1Char('/'));
 
-    setStringList("audio-files", audioFiles);
-    mpv_set_property_string(m_mpv.get(), "ytdl-format", ytdlFormat.toUtf8().constData());
+    if (!audio.isEmpty()) {
+        // Звук берётся из второй ссылки — с сайта качаем только видео.
+        // audio-delay не сбрасываем: у пары релизов сдвиг обычно одинаковый.
+        setStringList("file-local-options/audio-files", {audio});
+        setLocal("ytdl-format", QStringLiteral("bestvideo/best"));
+    } else {
+        setAudioDelay(0);
+    }
+
     // Выбор дорожек — глобальная опция: сбрасываем, чтобы номер дорожки
     // из прошлого файла не применился к новому.
     mpv_set_property_string(m_mpv.get(), "aid", "auto");
     mpv_set_property_string(m_mpv.get(), "sid", "auto");
+
+    // QML может попросить начать не с начала (setStartPosition)
+    m_hookStart = 0;
+    emit fileStarting(path);
+    if (m_hookStart > 0)
+        setLocal("start", QString::number(m_hookStart, 'f', 3));
+    m_hookStart = 0;
+}
+
+void MpvObject::setStartPosition(double seconds)
+{
+    m_hookStart = seconds;
 }
 
 QString MpvObject::normalizedSource(const QString& source) const
@@ -521,62 +563,170 @@ QString MpvObject::normalizedSource(const QString& source) const
     return normalizeSource(source);
 }
 
-void MpvObject::open(const QString& source, double start)
+void MpvObject::open(const QString& source, bool withFolder)
 {
     const QString path = normalizeSource(source);
     if (path.isEmpty())
         return;
 
-    m_pendingExternalAudio.clear();
-    prepareLoad(path, {}, m_defaultYtdlFormat);
-    setAudioDelay(0);
-    loadFile(path, start);
+    m_pairAudio.remove(path);
+    loadFile(path, QStringLiteral("replace"));
+    if (withFolder && m_autoloadFolder)
+        queueFolder(path);
 }
 
-void MpvObject::openWithAudio(const QString& video, const QString& audio, double start)
+void MpvObject::openWithAudio(const QString& video, const QString& audio)
 {
     const QString videoPath = normalizeSource(video);
     const QString audioPath = normalizeSource(audio);
     if (videoPath.isEmpty())
         return;
     if (audioPath.isEmpty()) {
-        open(videoPath, start);
+        open(videoPath);
         return;
     }
 
-    m_pendingExternalAudio = audioPath;
-    // Звук всё равно берётся из второй ссылки — с сайта качаем только видео.
-    // audio-delay не сбрасываем: у пары релизов сдвиг обычно одинаковый.
-    prepareLoad(videoPath, {audioPath}, QStringLiteral("bestvideo/best"));
-    loadFile(videoPath, start);
+    m_pairAudio.insert(videoPath, audioPath);
+    loadFile(videoPath, QStringLiteral("replace"));
+}
+
+void MpvObject::enqueue(const QString& source)
+{
+    const QString path = normalizeSource(source);
+    if (path.isEmpty())
+        return;
+    m_pairAudio.remove(path);
+    loadFile(path, m_idle && m_pendingLoads.isEmpty() ? QStringLiteral("append-play") : QStringLiteral("append"));
+}
+
+void MpvObject::enqueueWithAudio(const QString& video, const QString& audio)
+{
+    const QString videoPath = normalizeSource(video);
+    const QString audioPath = normalizeSource(audio);
+    if (videoPath.isEmpty())
+        return;
+    if (audioPath.isEmpty()) {
+        enqueue(videoPath);
+        return;
+    }
+    m_pairAudio.insert(videoPath, audioPath);
+    loadFile(videoPath, m_idle && m_pendingLoads.isEmpty() ? QStringLiteral("append-play") : QStringLiteral("append"));
+}
+
+// Остальные видео из папки файла — в очередь до и после него, по порядку
+// имён с учётом чисел (2 < 10), как autoload.lua в mpv
+void MpvObject::queueFolder(const QString& path)
+{
+    const QFileInfo info(path);
+    if (!info.isFile())
+        return;
+
+    static const QStringList filters{
+        QStringLiteral("*.mkv"), QStringLiteral("*.mp4"), QStringLiteral("*.avi"), QStringLiteral("*.webm"),
+        QStringLiteral("*.mov"), QStringLiteral("*.m2ts"), QStringLiteral("*.ts"), QStringLiteral("*.flv"),
+        QStringLiteral("*.wmv"), QStringLiteral("*.m4v"),
+    };
+    const QDir dir = info.dir();
+    QStringList files = dir.entryList(filters, QDir::Files);
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(files.begin(), files.end(), collator);
+
+    const int self = files.indexOf(info.fileName());
+    if (self < 0)
+        return;
+    for (int i = 0; i < files.size(); ++i) {
+        if (i == self)
+            continue;
+        const QString file = QDir::toNativeSeparators(dir.filePath(files[i]));
+        m_pairAudio.remove(file);
+        if (i < self)
+            loadFile(file, QStringLiteral("insert-at"), i);
+        else
+            loadFile(file, QStringLiteral("append"));
+    }
 }
 
 // Пока поток отрисовки не создал render context, vo mpv не инициализируется
 // и файл откроется без видео — поэтому loadfile откладываем до готовности.
-void MpvObject::loadFile(const QString& path, double start)
+void MpvObject::loadFile(const QString& path, const QString& flags, int index)
 {
+    QStringList args{QStringLiteral("loadfile"), path, flags};
+    if (index >= 0)
+        args << QString::number(index);
     if (!m_renderReady) {
-        m_pendingLoad = path;
-        m_pendingStart = start;
+        if (flags == QLatin1String("replace"))
+            m_pendingLoads.clear();
+        m_pendingLoads.append(args);
         update();  // первый updatePaintNode запустит поток отрисовки
         return;
     }
-    QStringList args{QStringLiteral("loadfile"), path, QStringLiteral("replace")};
-    // Начальная позиция — опцией самого файла, а не глобальной start:
-    // так она не перейдёт на следующие файлы
-    if (start > 0)
-        args << QStringLiteral("-1") << QStringLiteral("start=") + QString::number(start, 'f', 3);
     command(args);
 }
 
 void MpvObject::onRenderReady()
 {
     m_renderReady = true;
-    if (!m_pendingLoad.isEmpty()) {
-        const QString path = m_pendingLoad;
-        m_pendingLoad.clear();
-        loadFile(path, m_pendingStart);
+    const QList<QStringList> loads = std::exchange(m_pendingLoads, {});
+    for (const QStringList& args : loads)
+        command(args);
+}
+
+// ---------------------------------------------------------------------------
+// Очередь
+// ---------------------------------------------------------------------------
+
+void MpvObject::playlistNext()
+{
+    command({QStringLiteral("playlist-next")});
+}
+
+void MpvObject::playlistPrev()
+{
+    command({QStringLiteral("playlist-prev")});
+}
+
+void MpvObject::playlistPlay(int index)
+{
+    command({QStringLiteral("playlist-play-index"), QString::number(index)});
+}
+
+void MpvObject::playlistRemove(int index)
+{
+    command({QStringLiteral("playlist-remove"), QString::number(index)});
+}
+
+void MpvObject::playlistMove(int from, int before)
+{
+    command({QStringLiteral("playlist-move"), QString::number(from), QString::number(before)});
+}
+
+void MpvObject::playlistClearOthers()
+{
+    command({QStringLiteral("playlist-clear")});
+}
+
+void MpvObject::setAutoloadFolder(bool enabled)
+{
+    assign(this, m_autoloadFolder, enabled, &MpvObject::autoloadFolderChanged);
+}
+
+void MpvObject::updatePlaylist(const QVariantList& list)
+{
+    QVariantList items;
+    for (const QVariant& item : list) {
+        const QVariantMap entry = item.toMap();
+        items.append(QVariantMap{
+            {QStringLiteral("source"), entry.value(QStringLiteral("filename")).toString()},
+            {QStringLiteral("title"), entry.value(QStringLiteral("title")).toString()},
+            {QStringLiteral("current"), entry.value(QStringLiteral("current")).toBool()},
+        });
     }
+    if (items == m_playlist)
+        return;
+    m_playlist = items;
+    emit playlistChanged();
 }
 
 void MpvObject::addAudio(const QString& source)

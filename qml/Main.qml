@@ -32,9 +32,9 @@ ApplicationWindow {
     // Пока true — интерфейс не прячется
     readonly property bool uiPinned: mpv.idle || mpv.paused || controls.busy || topBar.hovered
                                      || urlDialog.visible || settingsPanel.visible || infoPanel.visible
-                                     || historyPanel.visible
+                                     || historyPanel.visible || queuePanel.visible
 
-    // Что сделать, когда yt-dlp вернёт прямую ссылку на аудио: "pair" | "add"
+    // Что сделать, когда yt-dlp вернёт прямую ссылку на аудио: "pair" | "add" | "queue"
     property string pendingAudioAction: ""
     property string pendingVideo: ""
     property string pendingAudioSource: ""  // страница, с которой yt-dlp берёт звук
@@ -62,6 +62,8 @@ ApplicationWindow {
         property string lastAudioUrl: ""
         property string accent: "#ffffff"
         property bool resume: true
+        property bool autoloadFolder: true
+        property int settingsSection: 0   // последний открытый раздел настроек
     }
 
     History {
@@ -96,6 +98,7 @@ ApplicationWindow {
         mpv.volume = settings.volume
         mpv.hwdec = settings.hwdec
         mpv.anime4kFast = settings.anime4kFast
+        mpv.autoloadFolder = settings.autoloadFolder
         if (settings.alang !== "") mpv.setMpvProperty("alang", settings.alang)
         if (settings.slang !== "") mpv.setMpvProperty("slang", settings.slang)
         if (settings.anime4kMode !== "off") mpv.setShaderPreset(settings.anime4kMode)
@@ -164,18 +167,61 @@ ApplicationWindow {
         speedBeforeHold = 0
     }
 
-    // Все открытия файлов идут сюда: запись в истории ищется по video + audio,
-    // и если в прошлый раз не досмотрели — продолжаем с того места.
+    // Пары в очереди: путь видео → звук, как его ввёл пользователь (страница
+    // сайта, а не временная прямая ссылка от yt-dlp) — это ключ в истории
+    property var pairAudioPages: ({})
+
+    // Все открытия файлов идут сюда (очередь заменяется).
     // audioDirect — прямая ссылка на звук, полученная yt-dlp со страницы audio.
-    function playMedia(video, audio, audioDirect) {
+    // withFolder = false — без соседних видео из папки.
+    function playMedia(video, audio, audioDirect, withFolder) {
         const v = mpv.normalizedSource(video)
         const a = audio ? mpv.normalizedSource(audio) : ""
         if (v === "") return
+        if (a !== "") {
+            pairAudioPages[v] = a
+            mpv.openWithAudio(v, audioDirect || a)
+        } else {
+            delete pairAudioPages[v]
+            mpv.open(v, withFolder !== false)
+        }
+    }
+
+    function enqueue(source) {
+        const v = mpv.normalizedSource(source)
+        if (v === "") return
+        delete pairAudioPages[v]
+        mpv.enqueue(v)
+        if (!mpv.idle) toast.show("В очереди: " + Theme.sourceName(v))
+    }
+
+    // Пара в очередь. Звук со страницы сайта yt-dlp достаёт сразу — прямые
+    // ссылки обычно живут несколько часов, этого хватает на очередь.
+    function enqueuePair(video, audio) {
+        const v = mpv.normalizedSource(video)
+        if (v === "") return
+        if (downloader.isDirectMedia(audio)) {
+            pairAudioPages[v] = mpv.normalizedSource(audio)
+            mpv.enqueueWithAudio(v, audio)
+            if (!mpv.idle) toast.show("В очереди: " + Theme.sourceName(v))
+        } else {
+            pendingAudioAction = "queue"
+            pendingVideo = v
+            pendingAudioSource = audio
+            toast.show("Получаю аудиопоток через yt-dlp…")
+            downloader.resolveAudio(audio)
+        }
+    }
+
+    // Файл из очереди начинает открываться (любой: открытый, следующий по
+    // очереди, выбранный в ней). Если в прошлый раз не досмотрели —
+    // продолжаем с того места.
+    function startingFile(path) {
+        const audio = pairAudioPages[path] || ""
         nowPlaying = null
-        loadingEntry = { video: v, audio: a }
-        resumedFrom = settings.resume ? watchHistory.resumePosition(watchHistory.find(v, a)) : 0
-        if (a !== "") mpv.openWithAudio(v, audioDirect || a, resumedFrom)
-        else mpv.open(v, resumedFrom)
+        loadingEntry = { video: path, audio: audio }
+        resumedFrom = settings.resume ? watchHistory.resumePosition(watchHistory.find(path, audio)) : 0
+        if (resumedFrom > 0) mpv.setStartPosition(resumedFrom)
     }
 
     // Запись из истории: пара со страницей сайта снова идёт через yt-dlp
@@ -216,9 +262,10 @@ ApplicationWindow {
         }
     }
 
-    // Перетаскивание: видео открывается, аудио и субтитры добавляются дорожками
+    // Перетаскивание: видео открывается, аудио и субтитры добавляются дорожками.
+    // Несколько видео — первое играет, остальные встают в очередь.
     function handleDrop(urls) {
-        let video = ""
+        const videos = []
         const audios = []
         const subs = []
         for (let i = 0; i < urls.length; ++i) {
@@ -226,12 +273,17 @@ ApplicationWindow {
             const ext = extensionOf(u)
             if (subtitleExtensions.indexOf(ext) >= 0) subs.push(u)
             else if (audioExtensions.indexOf(ext) >= 0) audios.push(u)
-            else if (video === "") video = u
+            else videos.push(u)
         }
 
-        if (video !== "") {
+        if (videos.length > 0) {
             pendingSubtitles = subs
-            playMedia(video, audios.length > 0 ? audios[0] : "")
+            if (videos.length === 1) {
+                playMedia(videos[0], audios.length > 0 ? audios[0] : "")
+                return
+            }
+            playMedia(videos[0], "", "", false)
+            videos.slice(1).forEach(v => mpv.enqueue(v))
             return
         }
         if (mpv.idle) {
@@ -273,6 +325,7 @@ ApplicationWindow {
                 win.resumedFrom = 0
             }
         }
+        onFileStarting: path => win.startingFile(path)
         onLoadingChanged: if (loading) win.nowPlaying = null
         onPositionChanged: {
             if (win.nowPlaying && !loading)
@@ -285,6 +338,11 @@ ApplicationWindow {
         onAudioResolved: (source, direct) => {
             if (win.pendingAudioAction === "pair") win.playMedia(win.pendingVideo, win.pendingAudioSource, direct)
             else if (win.pendingAudioAction === "add") mpv.addAudio(direct)
+            else if (win.pendingAudioAction === "queue") {
+                win.pairAudioPages[win.pendingVideo] = mpv.normalizedSource(win.pendingAudioSource)
+                mpv.enqueueWithAudio(win.pendingVideo, direct)
+                if (!mpv.idle) toast.show("В очереди: " + Theme.sourceName(win.pendingVideo))
+            }
             win.pendingAudioAction = ""
         }
         onResolveFailed: message => {
@@ -336,7 +394,20 @@ ApplicationWindow {
             if (!mpv.idle) mpv.togglePause()
             win.toggleFullscreen()
         }
-        onWheel: wheel => win.changeVolume(wheel.angleDelta.y > 0 ? 5 : -5)
+        // Щелчок колеса — 120 единиц, ±5% громкости. Тачпад и плавные колёса
+        // шлют много мелких событий — копим их до целого щелчка, иначе каждое
+        // меняло бы громкость на 5%. Горизонтальную прокрутку не трогаем.
+        property int wheelAccum: 0
+        onWheel: wheel => {
+            const dy = wheel.angleDelta.y
+            if (dy === 0) return
+            if ((dy > 0) !== (wheelAccum > 0)) wheelAccum = 0  // сменили направление
+            wheelAccum += dy
+            const notches = Math.trunc(wheelAccum / 120)
+            if (notches === 0) return
+            wheelAccum -= notches * 120
+            win.changeVolume(notches * 5)
+        }
     }
 
     Timer {
@@ -516,6 +587,7 @@ ApplicationWindow {
         onAddAudioFile: fileDialog.openFor("audio")
         onAddAudioUrl: urlDialog.openFor("audio", "", settings.lastAudioUrl)
         onAddSubtitleFile: fileDialog.openFor("subtitle")
+        onOpenQueue: queuePanel.open()
     }
 
     DropArea {
@@ -604,7 +676,10 @@ ApplicationWindow {
 
         title: purpose === "audio" ? "Добавить аудиодорожку"
              : purpose === "subtitle" ? "Добавить субтитры"
+             : purpose === "queue" ? "Добавить в очередь"
              : "Открыть видео"
+        // Видео можно выбрать несколько: первое играет, остальные — в очередь
+        fileMode: purpose === "video" || purpose === "queue" ? FileDialog.OpenFiles : FileDialog.OpenFile
         nameFilters: purpose === "audio"
                      ? ["Аудио (*.mka *.m4a *.aac *.mp3 *.opus *.ogg *.flac *.wav *.ac3 *.eac3 *.dts)", "Все файлы (*)"]
                      : purpose === "subtitle"
@@ -613,9 +688,18 @@ ApplicationWindow {
 
         onAccepted: {
             const file = selectedFile.toString()
-            if (purpose === "audio") mpv.addAudio(file)
-            else if (purpose === "subtitle") mpv.addSubtitle(file)
-            else win.playMedia(file)
+            if (purpose === "audio") {
+                mpv.addAudio(file)
+            } else if (purpose === "subtitle") {
+                mpv.addSubtitle(file)
+            } else if (purpose === "queue") {
+                selectedFiles.forEach(f => win.enqueue(f.toString()))
+            } else if (selectedFiles.length > 1) {
+                win.playMedia(selectedFiles[0].toString(), "", "", false)
+                selectedFiles.slice(1).forEach(f => mpv.enqueue(f.toString()))
+            } else {
+                win.playMedia(file)
+            }
         }
     }
 
@@ -624,6 +708,7 @@ ApplicationWindow {
         blurSource: win.contentItem
         onOpenSingle: url => win.openSource(url)
         onOpenPair: (video, audio) => win.openPair(video, audio)
+        onEnqueue: (video, audio) => audio !== "" ? win.enqueuePair(video, audio) : win.enqueue(video)
         onAddAudio: url => {
             settings.lastAudioUrl = url
             win.addAudioSource(url)
@@ -632,10 +717,17 @@ ApplicationWindow {
 
     SettingsPanel {
         id: settingsPanel
-        fullscreen: win.isFullscreen
         player: mpv
         ytdlp: downloader
         prefs: settings
+    }
+
+    QueuePanel {
+        id: queuePanel
+        fullscreen: win.isFullscreen
+        player: mpv
+        onAddFiles: fileDialog.openFor("queue")
+        onAddUrl: urlDialog.openFor("queue")
     }
 
     HistoryPanel {
@@ -703,6 +795,13 @@ ApplicationWindow {
         sequence: "I"
         enabled: win.keysEnabled && !mpv.idle
         onActivated: infoPanel.visible ? infoPanel.close() : infoPanel.open()
+    }
+    Shortcut { sequence: "Shift+N"; enabled: win.keysEnabled; onActivated: mpv.playlistNext() }
+    Shortcut { sequence: "Shift+P"; enabled: win.keysEnabled; onActivated: mpv.playlistPrev() }
+    Shortcut {
+        sequence: "Q"
+        enabled: win.keysEnabled && !mpv.idle
+        onActivated: queuePanel.visible ? queuePanel.close() : queuePanel.open()
     }
     Shortcut { sequence: "Ctrl+H"; onActivated: historyPanel.visible ? historyPanel.close() : historyPanel.open() }
     Shortcut { sequence: "Ctrl+,"; onActivated: settingsPanel.visible ? settingsPanel.close() : settingsPanel.open() }

@@ -4,8 +4,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Шторка настроек в стиле «Достижений» Bloom (.spanel): плавающая карточка
-// справа поверх затемнения, шапка «название + плашка», ниже колонка карточек.
+// Настройки — модалка по центру: слева разделы, справа карточки раздела
+// в стиле «Достижений» Bloom (.ach-card). Последний раздел запоминается.
 Popup {
     id: root
 
@@ -14,24 +14,27 @@ Popup {
     required property var prefs
 
     property string ytdlpMessage: ""
-    // 0 — шторка на месте, 1 — уехала за правый край
+    // 0 — карточка на месте, 1 — уехала за правый край (как ModalDialog)
     property real slide: 1
 
-    // В полном экране кнопок окна нет — шторка встаёт под самый верх,
-    // как в Bloom (--tb-h: 0 в fullscreen)
-    property bool fullscreen: false
-    property real panelTop: (fullscreen ? 0 : 32) + 16
-    Behavior on panelTop { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+    readonly property var sections: [
+        { title: "Оформление",      icon: "palette" },
+        { title: "Воспроизведение", icon: "speed" },
+        { title: "Видео",           icon: "video" },
+        { title: "yt-dlp",          icon: "download" },
+        { title: "Горячие клавиши", icon: "keyboard" }
+    ]
+    readonly property int section: Math.max(0, Math.min(sections.length - 1, prefs.settingsSection))
 
     parent: Overlay.overlay
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     padding: 0
-    width: Math.min(420, parent.width - 32)
-    height: parent.height - panelTop - 16
-    x: Math.round(parent.width - width - 16 + slide * (width + 40))
-    y: panelTop
+    width: Math.min(860, parent.width - 48)
+    height: Math.min(580, parent.height - 48)
+    x: Math.round((parent.width - width) / 2 + slide * (parent.width / 2 + width / 2 + 24))
+    y: Math.round((parent.height - height) / 2)
 
     Overlay.modal: Rectangle {
         color: Qt.rgba(0, 0, 0, 0.55)
@@ -66,23 +69,6 @@ Popup {
     }
 
     // --- Мелкие элементы ---
-
-    component Badge: Rectangle {
-        property alias text: badgeText.text
-        implicitWidth: badgeText.implicitWidth + 20
-        implicitHeight: badgeText.implicitHeight + 6
-        radius: height / 2
-        color: "transparent"
-        border.color: Theme.line
-        Text {
-            id: badgeText
-            anchors.centerIn: parent
-            color: Theme.text2
-            font.family: Theme.font
-            font.pixelSize: 12
-            font.weight: Theme.bold
-        }
-    }
 
     component Hint: Text {
         Layout.fillWidth: true
@@ -123,7 +109,7 @@ Popup {
 
     component Key: Rectangle {
         property alias text: keyText.text
-        implicitWidth: keyText.implicitWidth + 14
+        implicitWidth: Math.max(22, keyText.implicitWidth + 14)
         implicitHeight: 22
         radius: 6
         color: Theme.film(0.05)
@@ -138,298 +124,494 @@ Popup {
         }
     }
 
-    // --- Содержимое ---
+    // Пункт навигации слева
+    component NavButton: AbstractButton {
+        id: nav
+        required property var modelData
+        required property int index
+        readonly property bool selected: root.section === index
 
-    contentItem: ColumnLayout {
-        spacing: 0
+        Layout.fillWidth: true
+        implicitHeight: 38
+        hoverEnabled: true
+        focusPolicy: Qt.NoFocus
+        onClicked: root.prefs.settingsSection = index
 
-        // Шапка: название слева, плашка и закрытие справа
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 8
-            Layout.topMargin: 12
-            Layout.bottomMargin: 8
-            spacing: 10
-
+        background: Rectangle {
+            radius: Theme.radiusSm
+            color: nav.selected ? Theme.film(0.07) : nav.hovered ? Theme.film(0.04) : "transparent"
+            Behavior on color { ColorAnimation { duration: 120 } }
+        }
+        contentItem: Item {
+            Icon {
+                id: navIcon
+                x: 10
+                anchors.verticalCenter: parent.verticalCenter
+                iconName: nav.modelData.icon
+                size: 17
+                color: nav.selected ? Theme.accent : nav.hovered ? Theme.text : Theme.text2
+            }
             Text {
-                Layout.fillWidth: true
-                text: "Настройки"
-                color: Theme.text
+                anchors.left: navIcon.right
+                anchors.leftMargin: 10
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: nav.modelData.title
+                color: nav.selected || nav.hovered ? Theme.text : Theme.text2
                 font.family: Theme.font
-                font.pixelSize: 17
-                font.weight: Theme.bold
-                font.letterSpacing: -0.3
+                font.pixelSize: 13
+                font.weight: nav.selected ? Theme.bold : Font.Normal
                 elide: Text.ElideRight
             }
-            Badge { text: "v" + Qt.application.version }
-            IconButton {
-                iconName: "close"
-                iconSize: 16
-                restColor: Theme.text2
-                onClicked: root.close()
+        }
+    }
+
+    // Страница раздела: прокручиваемая колонка карточек
+    component SectionPage: Flickable {
+        id: page
+        default property alias cards: column.data
+        contentHeight: column.implicitHeight + 24
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        ColumnLayout {
+            id: column
+            x: 20
+            y: 4
+            width: page.width - 40
+            spacing: 10
+        }
+    }
+
+    // Группа горячих клавиш: [[[клавиши], "что делают"], …]
+    component KeyGroup: Rectangle {
+        id: group
+        property string title: ""
+        property var keys: []
+
+        Layout.fillWidth: true
+        Layout.alignment: Qt.AlignTop
+        implicitHeight: groupColumn.implicitHeight + 26
+        radius: Theme.radius
+        color: "transparent"
+        border.color: Theme.line
+
+        ColumnLayout {
+            id: groupColumn
+            anchors {
+                left: parent.left
+                right: parent.right
+                top: parent.top
+                margins: 13
+                leftMargin: 14
+                rightMargin: 14
+            }
+            spacing: 7
+
+            Text {
+                text: group.title
+                color: Theme.text2
+                font.family: Theme.font
+                font.pixelSize: 11
+                font.weight: Theme.bold
+                font.capitalization: Font.AllUppercase
+                font.letterSpacing: 0.7
+                bottomPadding: 2
+            }
+            Repeater {
+                model: group.keys
+                delegate: RowLayout {
+                    id: keyRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Row {
+                        Layout.preferredWidth: 92
+                        spacing: 4
+                        Repeater {
+                            model: keyRow.modelData[0]
+                            delegate: Key {
+                                required property string modelData
+                                text: modelData
+                            }
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: keyRow.modelData[1]
+                        color: Theme.text2
+                        font.family: Theme.font
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Содержимое ---
+
+    contentItem: RowLayout {
+        spacing: 0
+
+        // Навигация
+        Rectangle {
+            Layout.fillHeight: true
+            Layout.preferredWidth: 200
+            topLeftRadius: Theme.radius
+            bottomLeftRadius: Theme.radius
+            color: Theme.film(0.02)
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                anchors.topMargin: 16
+                spacing: 2
+
+                Text {
+                    Layout.leftMargin: 10
+                    Layout.bottomMargin: 12
+                    text: "Настройки"
+                    color: Theme.text
+                    font.family: Theme.font
+                    font.pixelSize: 17
+                    font.weight: Theme.bold
+                    font.letterSpacing: -0.3
+                }
+                Repeater {
+                    model: root.sections
+                    delegate: NavButton {}
+                }
+                Item { Layout.fillHeight: true }
+                Text {
+                    Layout.leftMargin: 10
+                    Layout.bottomMargin: 4
+                    text: "WPlayer " + Qt.application.version
+                    color: Theme.muted
+                    font.family: Theme.font
+                    font.pixelSize: 11
+                    font.weight: Theme.bold
+                }
+            }
+
+            Rectangle {
+                anchors.right: parent.right
+                width: 1
+                height: parent.height
+                color: Theme.line
             }
         }
 
-        Flickable {
-            id: flick
+        // Раздел
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            contentHeight: cards.implicitHeight + 24
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
+            spacing: 0
 
-            ColumnLayout {
-                id: cards
-                x: 16
-                y: 8
-                width: flick.width - 32
-                spacing: 10
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 8
+                Layout.topMargin: 12
+                Layout.bottomMargin: 10
 
-                // --- Цвет акцента ---
-                SettingCard {
+                Text {
                     Layout.fillWidth: true
-                    iconName: "palette"
-                    title: "Цвет акцента"
-                    description: "Кнопки, ползунки и активные иконки"
+                    text: root.sections[root.section].title
+                    color: Theme.text
+                    font.family: Theme.font
+                    font.pixelSize: 17
+                    font.weight: Theme.bold
+                    font.letterSpacing: -0.3
+                    elide: Text.ElideRight
+                }
+                IconButton {
+                    iconName: "close"
+                    iconSize: 16
+                    restColor: Theme.text2
+                    onClicked: root.close()
+                }
+            }
 
-                    Flow {
+            StackLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                currentIndex: root.section
+
+                // --- Оформление ---
+                SectionPage {
+                    SettingCard {
                         Layout.fillWidth: true
-                        spacing: 8
+                        iconName: "palette"
+                        title: "Цвет акцента"
+                        description: "Кнопки, ползунки и активные иконки"
 
-                        Repeater {
-                            model: Theme.accentPresets
-                            delegate: Swatch {
-                                required property string modelData
-                                swatchColor: modelData
-                                selected: Qt.colorEqual(modelData, Theme.accent)
-                                onClicked: root.prefs.accent = modelData
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Repeater {
+                                model: Theme.accentPresets
+                                delegate: Swatch {
+                                    required property string modelData
+                                    swatchColor: modelData
+                                    selected: Qt.colorEqual(modelData, Theme.accent)
+                                    onClicked: root.prefs.accent = modelData
+                                }
+                            }
+                            Swatch {
+                                id: customSwatch
+                                readonly property bool isCustom: !Theme.accentPresets.some(c => Qt.colorEqual(c, Theme.accent))
+                                swatchColor: isCustom ? Theme.accent : "transparent"
+                                selected: isCustom
+                                iconName: isCustom ? "" : "plus"
+                                onClicked: colorPicker.openFor(customSwatch, Theme.accent)
                             }
                         }
-                        Swatch {
-                            id: customSwatch
-                            readonly property bool isCustom: !Theme.accentPresets.some(c => Qt.colorEqual(c, Theme.accent))
-                            swatchColor: isCustom ? Theme.accent : "transparent"
-                            selected: isCustom
-                            iconName: isCustom ? "" : "plus"
-                            onClicked: colorPicker.openFor(customSwatch, Theme.accent)
+                    }
+                }
+
+                // --- Воспроизведение ---
+                SectionPage {
+                    SettingCard {
+                        Layout.fillWidth: true
+                        iconName: "history"
+                        title: "Продолжать с места"
+                        description: "Недосмотренное видео откроется там, где вы остановились. Home — к началу"
+                        on: root.prefs.resume
+                        trailing: UiSwitch {
+                            checked: root.prefs.resume
+                            onToggled: root.prefs.resume = checked
                         }
                     }
-                }
 
-                // --- Anime4K ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "magic"
-                    title: "Anime4K"
-                    on: root.player.shaderPreset !== "off"
-                    description: Theme.anime4kMode(root.player.shaderPreset).detail
-
-                    Segmented {
-                        Layout.maximumWidth: parent.width
-                        options: Theme.anime4kModes.map(m => ({ value: m.value, label: m.label }))
-                        current: root.player.shaderPreset
-                        onPicked: value => root.player.setShaderPreset(value)
+                    SettingCard {
+                        Layout.fillWidth: true
+                        iconName: "queue"
+                        title: "Следующие серии из папки"
+                        description: "При открытии файла остальные видео из его папки встают в очередь по порядку"
+                        on: root.prefs.autoloadFolder
+                        trailing: UiSwitch {
+                            checked: root.prefs.autoloadFolder
+                            onToggled: {
+                                root.prefs.autoloadFolder = checked
+                                root.player.autoloadFolder = checked
+                            }
+                        }
                     }
-                    Hint {
-                        text: "Шейдеры берутся из папки shaders рядом с WPlayer.exe. Ctrl+1…6 — режимы, Ctrl+0 — выключить"
-                    }
-                }
 
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "bolt"
-                    title: "Быстрый Anime4K"
-                    description: "Облегчённые модели для слабых видеокарт и ноутбуков"
-                    on: root.player.anime4kFast
-                    trailing: UiSwitch {
-                        checked: root.player.anime4kFast
-                        onToggled: {
-                            root.player.anime4kFast = checked
-                            root.prefs.anime4kFast = checked
+                    SettingCard {
+                        Layout.fillWidth: true
+                        iconName: "language"
+                        title: "Языки дорожек"
+                        description: "Коды через запятую, по приоритету. Применяются к следующему файлу"
+                        on: root.prefs.alang !== "" || root.prefs.slang !== ""
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            UiTextField {
+                                Layout.fillWidth: true
+                                capsule: true
+                                text: root.prefs.alang
+                                placeholderText: "Аудио: jpn,ja"
+                                onEditingFinished: {
+                                    root.prefs.alang = text
+                                    root.player.setMpvProperty("alang", text)
+                                }
+                            }
+                            UiTextField {
+                                Layout.fillWidth: true
+                                capsule: true
+                                text: root.prefs.slang
+                                placeholderText: "Субтитры: rus,eng"
+                                onEditingFinished: {
+                                    root.prefs.slang = text
+                                    root.player.setMpvProperty("slang", text)
+                                }
+                            }
                         }
                     }
                 }
 
                 // --- Видео ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "cpu"
-                    title: "Аппаратное декодирование"
-                    description: "Видео декодирует видеокарта — меньше нагрузка на процессор"
-                    on: root.player.hwdec
-                    trailing: UiSwitch {
-                        checked: root.player.hwdec
-                        onToggled: {
-                            root.player.hwdec = checked
-                            root.prefs.hwdec = checked
+                SectionPage {
+                    SettingCard {
+                        Layout.fillWidth: true
+                        iconName: "magic"
+                        title: "Anime4K"
+                        on: root.player.shaderPreset !== "off"
+                        description: Theme.anime4kMode(root.player.shaderPreset).detail
+
+                        Segmented {
+                            Layout.maximumWidth: parent.width
+                            options: Theme.anime4kModes.map(m => ({ value: m.value, label: m.label }))
+                            current: root.player.shaderPreset
+                            onPicked: value => root.player.setShaderPreset(value)
+                        }
+                        Hint {
+                            text: "Шейдеры берутся из папки shaders рядом с WPlayer.exe. Ctrl+1…6 — режимы, Ctrl+0 — выключить"
                         }
                     }
-                }
 
-                // --- История ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "history"
-                    title: "Продолжать с места"
-                    description: "Недосмотренное видео откроется там, где вы остановились. Home — к началу"
-                    on: root.prefs.resume
-                    trailing: UiSwitch {
-                        checked: root.prefs.resume
-                        onToggled: root.prefs.resume = checked
-                    }
-                }
-
-                // --- Языки ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "language"
-                    title: "Языки дорожек"
-                    description: "Коды через запятую, по приоритету. Применяются к следующему файлу"
-                    on: root.prefs.alang !== "" || root.prefs.slang !== ""
-
-                    RowLayout {
+                    SettingCard {
                         Layout.fillWidth: true
-                        spacing: 8
-
-                        UiTextField {
-                            Layout.fillWidth: true
-                            capsule: true
-                            text: root.prefs.alang
-                            placeholderText: "Аудио: jpn,ja"
-                            onEditingFinished: {
-                                root.prefs.alang = text
-                                root.player.setMpvProperty("alang", text)
+                        iconName: "bolt"
+                        title: "Быстрый Anime4K"
+                        description: "Облегчённые модели для слабых видеокарт и ноутбуков"
+                        on: root.player.anime4kFast
+                        trailing: UiSwitch {
+                            checked: root.player.anime4kFast
+                            onToggled: {
+                                root.player.anime4kFast = checked
+                                root.prefs.anime4kFast = checked
                             }
                         }
-                        UiTextField {
-                            Layout.fillWidth: true
-                            capsule: true
-                            text: root.prefs.slang
-                            placeholderText: "Субтитры: rus,eng"
-                            onEditingFinished: {
-                                root.prefs.slang = text
-                                root.player.setMpvProperty("slang", text)
+                    }
+
+                    SettingCard {
+                        Layout.fillWidth: true
+                        iconName: "cpu"
+                        title: "Аппаратное декодирование"
+                        description: "Видео декодирует видеокарта — меньше нагрузка на процессор"
+                        on: root.player.hwdec
+                        trailing: UiSwitch {
+                            checked: root.player.hwdec
+                            onToggled: {
+                                root.player.hwdec = checked
+                                root.prefs.hwdec = checked
                             }
                         }
                     }
                 }
 
                 // --- yt-dlp ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "download"
-                    title: "yt-dlp"
-                    on: root.ytdlp.version !== ""
-                    description: root.ytdlp.version === ""
-                                 ? "Не найден — нужен для ссылок на сайты"
-                                 : "Версия " + root.ytdlp.version
-                                   + (root.ytdlp.bundled ? " · рядом с программой" : " · из PATH")
-                    trailing: PillButton {
-                        compact: true
-                        iconName: root.ytdlp.bundled ? "refresh" : "download"
-                        text: root.ytdlp.bundled ? "Обновить" : "Скачать"
-                        enabled: !root.ytdlp.busy
-                        onClicked: {
-                            root.ytdlpMessage = ""
-                            root.ytdlp.update()
-                        }
-                    }
-
-                    // Полоса как .ach-bar; пока идёт обновление — бегущая
-                    Rectangle {
-                        id: busyTrack
-                        visible: root.ytdlp.busy
+                SectionPage {
+                    SettingCard {
                         Layout.fillWidth: true
-                        implicitHeight: 6
-                        radius: 3
-                        color: Theme.film(0.08)
-                        clip: true
-
-                        Rectangle {
-                            width: busyTrack.width * 0.35
-                            height: parent.height
-                            radius: 3
-                            color: Theme.accent
-                            NumberAnimation on x {
-                                running: root.ytdlp.busy
-                                loops: Animation.Infinite
-                                from: -busyTrack.width * 0.35
-                                to: busyTrack.width
-                                duration: 1100
-                                easing.type: Easing.InOutQuad
+                        iconName: "download"
+                        title: "yt-dlp"
+                        on: root.ytdlp.version !== ""
+                        description: root.ytdlp.version === ""
+                                     ? "Не найден — нужен для ссылок на сайты"
+                                     : "Версия " + root.ytdlp.version
+                                       + (root.ytdlp.bundled ? " · рядом с программой" : " · из PATH")
+                        trailing: PillButton {
+                            compact: true
+                            iconName: root.ytdlp.bundled ? "refresh" : "download"
+                            text: root.ytdlp.bundled ? "Обновить" : "Скачать"
+                            enabled: !root.ytdlp.busy
+                            onClicked: {
+                                root.ytdlpMessage = ""
+                                root.ytdlp.update()
                             }
                         }
-                    }
-                    Hint {
-                        visible: root.ytdlpMessage !== ""
-                        text: root.ytdlpMessage
+
+                        // Полоса как .ach-bar; пока идёт обновление — бегущая
+                        Rectangle {
+                            id: busyTrack
+                            visible: root.ytdlp.busy
+                            Layout.fillWidth: true
+                            implicitHeight: 6
+                            radius: 3
+                            color: Theme.film(0.08)
+                            clip: true
+
+                            Rectangle {
+                                width: busyTrack.width * 0.35
+                                height: parent.height
+                                radius: 3
+                                color: Theme.accent
+                                NumberAnimation on x {
+                                    running: root.ytdlp.busy
+                                    loops: Animation.Infinite
+                                    from: -busyTrack.width * 0.35
+                                    to: busyTrack.width
+                                    duration: 1100
+                                    easing.type: Easing.InOutQuad
+                                }
+                            }
+                        }
+                        Hint {
+                            visible: root.ytdlpMessage !== ""
+                            text: root.ytdlpMessage
+                        }
+                        Hint {
+                            text: "Нужен для страниц сайтов (YouTube и другие) и для звука из второй ссылки. Сайты меняются — если ссылка перестала открываться, обновите"
+                        }
                     }
                 }
 
                 // --- Горячие клавиши ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "keyboard"
-                    title: "Горячие клавиши"
+                SectionPage {
+                    id: keysPage
 
-                    Repeater {
-                        model: [
-                            [["Space"], "Пауза"],
-                            [["←", "→"], "−5 / +5 с"],
-                            [["Ctrl", "→"], "+85 с — пропустить опенинг"],
-                            [["PgUp", "PgDn"], "Предыдущая / следующая глава"],
-                            [["[", "]"], "Скорость −/+, Backspace — обычная"],
-                            [["ЛКМ"], "Удерживать на видео — 2×"],
-                            [[",", "."], "Кадр назад / вперёд"],
-                            [["↑", "↓"], "Громкость"],
-                            [["M"], "Без звука"],
-                            [["F"], "Полный экран"],
-                            [["I"], "Инфо о видео"],
-                            [["A"], "Следующая аудиодорожка"],
-                            [["S"], "Следующие субтитры"],
-                            [["Ctrl", "−"], "Задержка аудио −50 мс"],
-                            [["Ctrl", "1…6"], "Anime4K, Ctrl+0 — выкл"],
-                            [["Home"], "К началу видео"],
-                            [["Ctrl", "H"], "История"],
-                            [["Ctrl", "O"], "Открыть файл"],
-                            [["Ctrl", "L"], "Открыть ссылку"]
-                        ]
-                        delegate: RowLayout {
-                            id: keyRow
-                            required property var modelData
-                            Layout.fillWidth: true
-                            spacing: 10
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: keysPage.width >= 600 ? 2 : 1
+                        columnSpacing: 10
+                        rowSpacing: 10
 
-                            Row {
-                                Layout.preferredWidth: 96
-                                spacing: 4
-                                Repeater {
-                                    model: keyRow.modelData[0]
-                                    delegate: Key {
-                                        required property string modelData
-                                        text: modelData
-                                    }
-                                }
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: keyRow.modelData[1]
-                                color: Theme.text2
-                                font.family: Theme.font
-                                font.pixelSize: 12
-                                elide: Text.ElideRight
-                            }
+                        KeyGroup {
+                            title: "Воспроизведение"
+                            keys: [
+                                [["Space"], "Пауза"],
+                                [["ЛКМ"], "Удерживать на видео — 2×"],
+                                [["[", "]"], "Скорость − / +"],
+                                [["⌫"], "Обычная скорость"],
+                                [[",", "."], "Кадр назад / вперёд"]
+                            ]
+                        }
+                        KeyGroup {
+                            title: "Перемотка"
+                            keys: [
+                                [["←", "→"], "−5 / +5 с"],
+                                [["Shift", "←→"], "−1 / +1 с"],
+                                [["Ctrl", "→"], "+85 с — пропустить опенинг"],
+                                [["PgUp", "PgDn"], "Предыдущая / следующая глава"],
+                                [["Home"], "К началу видео"]
+                            ]
+                        }
+                        KeyGroup {
+                            title: "Звук и дорожки"
+                            keys: [
+                                [["↑", "↓"], "Громкость"],
+                                [["M"], "Без звука"],
+                                [["A"], "Следующая аудиодорожка"],
+                                [["S"], "Следующие субтитры"],
+                                [["Ctrl", "− ="], "Задержка аудио ∓50 мс"]
+                            ]
+                        }
+                        KeyGroup {
+                            title: "Очередь и окна"
+                            keys: [
+                                [["Shift", "N"], "Следующее в очереди"],
+                                [["Shift", "P"], "Предыдущее в очереди"],
+                                [["Q"], "Очередь"],
+                                [["I"], "Инфо о видео"],
+                                [["Ctrl", "H"], "История"],
+                                [["F"], "Полный экран, Esc — выйти"]
+                            ]
+                        }
+                        KeyGroup {
+                            title: "Открыть"
+                            keys: [
+                                [["Ctrl", "O"], "Файл"],
+                                [["Ctrl", "L"], "Ссылку"],
+                                [["Ctrl", "⇧", "L"], "Видео + аудио"],
+                                [["Ctrl", ","], "Настройки"]
+                            ]
+                        }
+                        KeyGroup {
+                            title: "Anime4K"
+                            keys: [
+                                [["Ctrl", "1…6"], "Режимы A … C+A"],
+                                [["Ctrl", "0"], "Выключить"]
+                            ]
                         }
                     }
-                }
-
-                // --- О программе ---
-                SettingCard {
-                    Layout.fillWidth: true
-                    iconName: "info"
-                    title: "WPlayer"
-                    trailing: Badge { text: Qt.application.version }
                 }
             }
         }

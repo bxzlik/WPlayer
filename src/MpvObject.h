@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QQuickItem>
 #include <QVariant>
 #include <QtQml/qqmlregistration.h>
@@ -43,6 +44,11 @@ class MpvObject : public QQuickItem
     Q_PROPERTY(int subtitleId READ subtitleId NOTIFY subtitleIdChanged)
     Q_PROPERTY(QString shaderPreset READ shaderPreset NOTIFY shaderPresetChanged)
     Q_PROPERTY(bool anime4kFast READ anime4kFast WRITE setAnime4kFast NOTIFY anime4kFastChanged)
+    // Очередь (плейлист mpv): [{ source, title, current }] и номер текущего
+    Q_PROPERTY(QVariantList playlist READ playlist NOTIFY playlistChanged)
+    Q_PROPERTY(int playlistPos READ playlistPos NOTIFY playlistPosChanged)
+    // open() добавляет в очередь остальные видео из папки файла
+    Q_PROPERTY(bool autoloadFolder READ autoloadFolder WRITE setAutoloadFolder NOTIFY autoloadFolderChanged)
 
 public:
     explicit MpvObject(QQuickItem* parent = nullptr);
@@ -70,6 +76,9 @@ public:
     int subtitleId() const { return m_subtitleId; }
     QString shaderPreset() const { return m_shaderPreset; }
     bool anime4kFast() const { return m_anime4kFast; }
+    QVariantList playlist() const { return m_playlist; }
+    int playlistPos() const { return m_playlistPos; }
+    bool autoloadFolder() const { return m_autoloadFolder; }
 
     void setPaused(bool paused);
     void setVolume(double volume);
@@ -78,14 +87,22 @@ public:
     void setSpeed(double speed);
     void setHwdec(bool enabled);
     void setAnime4kFast(bool fast);
+    void setAutoloadFolder(bool enabled);
 
     // source — путь, file:///-URL или ссылка (сайты открываются через yt-dlp).
-    // start > 0 — начать с этой секунды (продолжение просмотра)
-    Q_INVOKABLE void open(const QString& source, double start = 0);
+    // Очередь заменяется; withFolder — с соседними видео из папки, если
+    // включён autoloadFolder
+    Q_INVOKABLE void open(const QString& source, bool withFolder = true);
     // Видео из video, звук из audio (через опцию mpv audio-files).
     // audio должен быть файлом или прямой ссылкой на поток — страницы сайтов
     // заранее разрешаются через YtDlp::resolveAudio.
-    Q_INVOKABLE void openWithAudio(const QString& video, const QString& audio, double start = 0);
+    Q_INVOKABLE void openWithAudio(const QString& video, const QString& audio);
+    // В конец очереди; если ничего не играет — сразу воспроизвести
+    Q_INVOKABLE void enqueue(const QString& source);
+    // Пара «видео + аудио» в конец очереди (audio — как у openWithAudio)
+    Q_INVOKABLE void enqueueWithAudio(const QString& video, const QString& audio);
+    // Вызывается из обработчика fileStarting: начать файл с этой секунды
+    Q_INVOKABLE void setStartPosition(double seconds);
     // Источник в том виде, в каком его откроет mpv: file:///-URL и путь
     // в кавычках → нативный путь. Ключ записи в истории.
     Q_INVOKABLE QString normalizedSource(const QString& source) const;
@@ -100,6 +117,15 @@ public:
     Q_INVOKABLE void seekChapter(int delta);
     Q_INVOKABLE void setAudioTrack(int id);     // -1 = выключить
     Q_INVOKABLE void setSubtitleTrack(int id);  // -1 = выключить
+
+    Q_INVOKABLE void playlistNext();
+    Q_INVOKABLE void playlistPrev();
+    Q_INVOKABLE void playlistPlay(int index);
+    Q_INVOKABLE void playlistRemove(int index);
+    // Переставить запись from перед записью before (индексы до перестановки)
+    Q_INVOKABLE void playlistMove(int from, int before);
+    // Убрать всё, кроме текущего
+    Q_INVOKABLE void playlistClearOthers();
 
     // "off", "A", "B", "C", "AA", "BB", "CA"
     Q_INVOKABLE void setShaderPreset(const QString& preset);
@@ -137,6 +163,13 @@ signals:
     void subtitleIdChanged();
     void shaderPresetChanged();
     void anime4kFastChanged();
+    void playlistChanged();
+    void playlistPosChanged();
+    void autoloadFolderChanged();
+
+    // Файл очереди начинает открываться (path — как в очереди). Обработчик
+    // может вызвать setStartPosition — позиция применится к этому файлу.
+    void fileStarting(const QString& path);
 
     void fileLoaded();
     void errorOccurred(const QString& message);
@@ -147,13 +180,15 @@ private:
     void processEvents();
     void startRenderThread();
     void onRenderReady();
-    void loadFile(const QString& path, double start = 0);
+    void loadFile(const QString& path, const QString& flags, int index = -1);
+    void queueFolder(const QString& path);
+    void prepareFile();
+    void updatePlaylist(const QVariantList& list);
     void handleEvent(const mpv_event& event);
     void handlePropertyChange(const char* name, const QVariant& value);
     void updateTracks(const QVariantList& trackList);
     void updateChapters(const QVariantList& chapterList);
     void selectExternalAudio(const QString& source);
-    void prepareLoad(const QString& source, const QStringList& audioFiles, const QString& ytdlFormat);
     void setLoading(bool loading);
 
     QVariant getProperty(const char* name) const;
@@ -166,12 +201,13 @@ private:
     QOffscreenSurface* m_surface = nullptr;
     MpvRenderThread* m_renderThread = nullptr;
     bool m_renderReady = false;
-    QString m_pendingLoad;  // loadfile, ждущий готовности отрисовки
-    double m_pendingStart = 0;
+    QList<QStringList> m_pendingLoads;  // loadfile, ждущие готовности отрисовки
 
-    QString m_defaultYtdlFormat;
     QString m_lastLogError;
-    QString m_pendingExternalAudio;  // аудио из второй ссылки, выбрать после загрузки
+    // Пары «видео + аудио»: путь видео в очереди → звук из второй ссылки
+    QHash<QString, QString> m_pairAudio;
+    QString m_currentPairAudio;  // звук текущего файла, выбрать после загрузки
+    double m_hookStart = 0;
 
     bool m_idle = true;
     bool m_loading = false;
@@ -194,4 +230,7 @@ private:
     int m_subtitleId = -1;
     QString m_shaderPreset = QStringLiteral("off");
     bool m_anime4kFast = false;
+    QVariantList m_playlist;
+    int m_playlistPos = -1;
+    bool m_autoloadFolder = false;
 };

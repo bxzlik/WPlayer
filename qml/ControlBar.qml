@@ -22,6 +22,7 @@ Item {
     signal addAudioFile()
     signal addAudioUrl()
     signal addSubtitleFile()
+    signal openQueue()
 
     // Пока true, управление не должно автоматически скрываться
     readonly property bool busy: bottomHover.hovered || centerHover.hovered
@@ -88,7 +89,7 @@ Item {
         CenterButton {
             anchors.verticalCenter: parent.verticalCenter
             visible: root.player.chapters.length > 0
-            iconName: "chapter-prev"
+            iconName: "fast-back"
             iconSize: 20
             onClicked: root.player.seekChapter(-1)
         }
@@ -129,7 +130,7 @@ Item {
         CenterButton {
             anchors.verticalCenter: parent.verticalCenter
             visible: root.player.chapters.length > 0
-            iconName: "chapter-next"
+            iconName: "fast-forward"
             iconSize: 20
             onClicked: root.player.seekChapter(1)
         }
@@ -155,10 +156,39 @@ Item {
             width: parent.width
             height: 36
 
+            // Очередь: предыдущее / следующее (если в ней больше одного) и список
+            Row {
+                id: queueRow
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                readonly property bool multiple: root.player.playlist.length > 1
+
+                BarButton {
+                    visible: queueRow.multiple
+                    enabled: root.player.playlistPos > 0
+                    iconName: "prev"
+                    iconSize: 16
+                    onClicked: root.player.playlistPrev()
+                }
+                BarButton {
+                    visible: queueRow.multiple
+                    enabled: root.player.playlistPos < root.player.playlist.length - 1
+                    iconName: "next"
+                    iconSize: 16
+                    onClicked: root.player.playlistNext()
+                }
+                BarButton {
+                    iconName: "queue"
+                    active: queueRow.multiple
+                    label: queueRow.multiple ? (root.player.playlistPos + 1) + " / " + root.player.playlist.length : ""
+                    onClicked: root.openQueue()
+                }
+            }
+
             // Громкость: иконка, ползунок выезжает при наведении
             Row {
                 id: volumeRow
-                anchors.left: parent.left
+                anchors.left: queueRow.right
                 anchors.verticalCenter: parent.verticalCenter
                 readonly property bool expanded: volumeHover.hovered || volumeSlider.pressed
 
@@ -231,7 +261,7 @@ Item {
             AbstractButton {
                 id: timeButton
                 anchors.verticalCenter: parent.verticalCenter
-                x: Math.max(volumeRow.width + 8, Math.min((parent.width - width) / 2, iconRow.x - width - 8))
+                x: Math.max(volumeRow.x + volumeRow.width + 8, Math.min((parent.width - width) / 2, iconRow.x - width - 8))
                 hoverEnabled: true
                 focusPolicy: Qt.NoFocus
                 padding: 4

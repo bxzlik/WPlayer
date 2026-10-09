@@ -2,18 +2,21 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Открытие по ссылке: одна ссылка, «видео + аудио» или только аудио
+// Открытие по ссылке: одна ссылка, «видео + аудио», только аудио.
+// В режиме очереди — то же самое, но видео встаёт в конец очереди.
 ModalDialog {
     id: root
 
-    // "single" | "pair" | "audio"
+    // "single" | "pair" | "audio" | "queue"
     property string mode: "single"
 
     signal openSingle(string url)
     signal openPair(string videoUrl, string audioUrl)
     signal addAudio(string url)
+    signal enqueue(string videoUrl, string audioUrl)  // audioUrl пустой — без пары
 
     readonly property bool audioOnly: mode === "audio"
+    readonly property bool queueMode: mode === "queue"
     readonly property bool withAudio: audioOnly || pairSwitch.checked
     readonly property bool valid: audioOnly ? audioField.text.trim() !== ""
                                             : videoField.text.trim() !== ""
@@ -33,14 +36,16 @@ ModalDialog {
         const video = videoField.text.trim()
         const audio = audioField.text.trim()
         if (audioOnly) addAudio(audio)
+        else if (queueMode) enqueue(video, withAudio ? audio : "")
         else if (withAudio) openPair(video, audio)
         else openSingle(video)
         close()
     }
 
-    title: audioOnly ? "Аудио по ссылке" : "Открыть ссылку"
+    title: audioOnly ? "Аудио по ссылке" : queueMode ? "Ссылка в очередь" : "Открыть ссылку"
     subtitle: audioOnly ? "Дорожка добавится к текущему видео и сразу включится"
-                        : "Файл, прямая ссылка или страница сайта — сайты открываются через yt-dlp"
+            : queueMode ? "Встанет в конец очереди. Сайты открываются через yt-dlp"
+            : "Файл, прямая ссылка или страница сайта — сайты открываются через yt-dlp"
 
     onOpened: (audioOnly ? audioField : videoField).forceActiveFocus()
 
@@ -145,7 +150,7 @@ ModalDialog {
             large: true
             primary: true
             enabled: root.valid
-            text: root.audioOnly ? "Добавить" : "Открыть"
+            text: root.audioOnly || root.queueMode ? "Добавить" : "Открыть"
             onClicked: root.submit()
         }
     ]

@@ -20,6 +20,10 @@ A Windows desktop player built on mpv: local files and links, Anime4K upscaling 
 | --- | --- |
 | 🎬 **Files and links** | Local files, direct links and site pages via yt-dlp |
 | 🎧 **Video + audio** | Picture from one link, sound from another — for dubs from a different source, with audio delay control |
+| 📜 **History** | Recently watched on the start screen, resume where you left off |
+| 📋 **Queue** | Several files at once, next episodes from the folder, auto-advance, drag to reorder |
+| ⏩ **Playback** | Speed 0.25–2×, hold the mouse for 2×, +85 s opening skip, chapter buttons |
+| ℹ️ **Video info** | Codec, resolution, bit depth, HDR, decoder, audio and subtitle tracks |
 | ✨ **Anime4K** | Modes A / B / C / A+A / B+B / C+A, quality and fast variants |
 | 🎨 **Accent color** | Palette or any custom color |
 | 🖥️ **Native window** | Custom title bar with Snap Layouts, smooth playback while the UI stays responsive |
