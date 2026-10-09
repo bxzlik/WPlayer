@@ -7,6 +7,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
+#include <QRegularExpression>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
@@ -514,7 +516,12 @@ void MpvObject::prepareLoad(const QString& source, const QStringList& audioFiles
     mpv_set_property_string(m_mpv.get(), "sid", "auto");
 }
 
-void MpvObject::open(const QString& source)
+QString MpvObject::normalizedSource(const QString& source) const
+{
+    return normalizeSource(source);
+}
+
+void MpvObject::open(const QString& source, double start)
 {
     const QString path = normalizeSource(source);
     if (path.isEmpty())
@@ -523,17 +530,17 @@ void MpvObject::open(const QString& source)
     m_pendingExternalAudio.clear();
     prepareLoad(path, {}, m_defaultYtdlFormat);
     setAudioDelay(0);
-    loadFile(path);
+    loadFile(path, start);
 }
 
-void MpvObject::openWithAudio(const QString& video, const QString& audio)
+void MpvObject::openWithAudio(const QString& video, const QString& audio, double start)
 {
     const QString videoPath = normalizeSource(video);
     const QString audioPath = normalizeSource(audio);
     if (videoPath.isEmpty())
         return;
     if (audioPath.isEmpty()) {
-        open(videoPath);
+        open(videoPath, start);
         return;
     }
 
@@ -541,19 +548,25 @@ void MpvObject::openWithAudio(const QString& video, const QString& audio)
     // Звук всё равно берётся из второй ссылки — с сайта качаем только видео.
     // audio-delay не сбрасываем: у пары релизов сдвиг обычно одинаковый.
     prepareLoad(videoPath, {audioPath}, QStringLiteral("bestvideo/best"));
-    loadFile(videoPath);
+    loadFile(videoPath, start);
 }
 
 // Пока поток отрисовки не создал render context, vo mpv не инициализируется
 // и файл откроется без видео — поэтому loadfile откладываем до готовности.
-void MpvObject::loadFile(const QString& path)
+void MpvObject::loadFile(const QString& path, double start)
 {
     if (!m_renderReady) {
         m_pendingLoad = path;
+        m_pendingStart = start;
         update();  // первый updatePaintNode запустит поток отрисовки
         return;
     }
-    command({QStringLiteral("loadfile"), path, QStringLiteral("replace")});
+    QStringList args{QStringLiteral("loadfile"), path, QStringLiteral("replace")};
+    // Начальная позиция — опцией самого файла, а не глобальной start:
+    // так она не перейдёт на следующие файлы
+    if (start > 0)
+        args << QStringLiteral("-1") << QStringLiteral("start=") + QString::number(start, 'f', 3);
+    command(args);
 }
 
 void MpvObject::onRenderReady()
@@ -562,7 +575,7 @@ void MpvObject::onRenderReady()
     if (!m_pendingLoad.isEmpty()) {
         const QString path = m_pendingLoad;
         m_pendingLoad.clear();
-        loadFile(path);
+        loadFile(path, m_pendingStart);
     }
 }
 
@@ -695,6 +708,277 @@ void MpvObject::setAnime4kFast(bool fast)
     emit anime4kFastChanged();
     if (m_shaderPreset != QLatin1String("off"))
         setShaderPreset(m_shaderPreset);  // пересобрать цепочку
+}
+
+// ---------------------------------------------------------------------------
+// Сведения о файле
+// ---------------------------------------------------------------------------
+
+namespace {
+
+QString codecName(const QString& codec)
+{
+    static const QHash<QString, QString> names{
+        {QStringLiteral("h264"), QStringLiteral("H.264 (AVC)")},
+        {QStringLiteral("hevc"), QStringLiteral("H.265 (HEVC)")},
+        {QStringLiteral("av1"), QStringLiteral("AV1")},
+        {QStringLiteral("vp8"), QStringLiteral("VP8")},
+        {QStringLiteral("vp9"), QStringLiteral("VP9")},
+        {QStringLiteral("mpeg2video"), QStringLiteral("MPEG-2")},
+        {QStringLiteral("mpeg4"), QStringLiteral("MPEG-4 Part 2")},
+        {QStringLiteral("aac"), QStringLiteral("AAC")},
+        {QStringLiteral("opus"), QStringLiteral("Opus")},
+        {QStringLiteral("vorbis"), QStringLiteral("Vorbis")},
+        {QStringLiteral("flac"), QStringLiteral("FLAC")},
+        {QStringLiteral("mp3"), QStringLiteral("MP3")},
+        {QStringLiteral("ac3"), QStringLiteral("Dolby Digital (AC-3)")},
+        {QStringLiteral("eac3"), QStringLiteral("Dolby Digital Plus (E-AC-3)")},
+        {QStringLiteral("truehd"), QStringLiteral("Dolby TrueHD")},
+        {QStringLiteral("dts"), QStringLiteral("DTS")},
+        {QStringLiteral("ass"), QStringLiteral("ASS")},
+        {QStringLiteral("ssa"), QStringLiteral("SSA")},
+        {QStringLiteral("subrip"), QStringLiteral("SRT")},
+        {QStringLiteral("webvtt"), QStringLiteral("WebVTT")},
+        {QStringLiteral("hdmv_pgs_subtitle"), QStringLiteral("PGS")},
+        {QStringLiteral("dvd_subtitle"), QStringLiteral("VobSub")},
+    };
+    if (codec.startsWith(QLatin1String("pcm_")))
+        return QStringLiteral("PCM");
+    return names.value(codec, codec.toUpper());
+}
+
+QString formatSize(double bytes)
+{
+    if (bytes >= 1024.0 * 1024 * 1024)
+        return MpvObject::tr("%1 ГБ").arg(bytes / (1024.0 * 1024 * 1024), 0, 'f', 2);
+    if (bytes >= 1024.0 * 1024)
+        return MpvObject::tr("%1 МБ").arg(bytes / (1024.0 * 1024), 0, 'f', 1);
+    return MpvObject::tr("%1 КБ").arg(qRound(bytes / 1024.0));
+}
+
+QString formatBitrate(double bitsPerSecond)
+{
+    if (bitsPerSecond >= 1e6)
+        return MpvObject::tr("%1 Мбит/с").arg(bitsPerSecond / 1e6, 0, 'f', 1);
+    return MpvObject::tr("%1 кбит/с").arg(qRound(bitsPerSecond / 1e3));
+}
+
+QString formatDuration(double seconds)
+{
+    const qint64 s = qint64(seconds);
+    const QString sec = QStringLiteral("%1").arg(s % 60, 2, 10, QLatin1Char('0'));
+    if (s < 3600)
+        return QStringLiteral("%1:%2").arg(s / 60).arg(sec);
+    return QStringLiteral("%1:%2:%3").arg(s / 3600).arg((s % 3600) / 60, 2, 10, QLatin1Char('0')).arg(sec);
+}
+
+// Число без лишних нулей: 23.976, 24, 29.97
+QString trimmedNumber(double value, int decimals)
+{
+    QString text = QString::number(value, 'f', decimals);
+    if (text.contains(QLatin1Char('.'))) {
+        while (text.endsWith(QLatin1Char('0')))
+            text.chop(1);
+        if (text.endsWith(QLatin1Char('.')))
+            text.chop(1);
+    }
+    return text;
+}
+
+// Глубина цвета по формату пикселей: yuv420p10 / p010 → 10, nv12 / yuv420p → 8
+int bitDepth(const QString& pixfmt)
+{
+    static const QRegularExpression suffix(QStringLiteral("p(\\d{1,2})(le|be)?$"));
+    static const QRegularExpression packed(QStringLiteral("^p0?(\\d{2})"));
+    QRegularExpressionMatch m = packed.match(pixfmt);
+    if (m.hasMatch())
+        return m.captured(1).toInt();
+    m = suffix.match(pixfmt);
+    if (m.hasMatch())
+        return m.captured(1).toInt();
+    if (pixfmt.startsWith(QLatin1String("nv")) || pixfmt.startsWith(QLatin1String("yuv"))
+        || pixfmt.startsWith(QLatin1String("yuvj")))
+        return 8;
+    return 0;
+}
+
+QString trackName(const QVariantMap& track)
+{
+    QStringList parts;
+    const QString title = track.value(QStringLiteral("title")).toString();
+    if (!title.isEmpty() && !title.contains(QLatin1String("://")))
+        parts << title;
+    const QString lang = track.value(QStringLiteral("lang")).toString();
+    if (!lang.isEmpty())
+        parts << lang.toUpper();
+    if (parts.isEmpty())
+        parts << MpvObject::tr("Дорожка %1").arg(track.value(QStringLiteral("id")).toInt());
+    return parts.join(QStringLiteral(" · "));
+}
+
+void addRow(QVariantList& rows, const QString& label, const QString& value)
+{
+    if (!value.isEmpty())
+        rows.append(QVariantMap{{QStringLiteral("label"), label}, {QStringLiteral("value"), value}});
+}
+
+QVariantMap section(const QString& title, const QString& icon, const QVariantList& rows)
+{
+    return {{QStringLiteral("title"), title}, {QStringLiteral("icon"), icon}, {QStringLiteral("rows"), rows}};
+}
+
+} // namespace
+
+QVariantMap MpvObject::currentTrack(const char* type) const
+{
+    return getProperty(QByteArray("current-tracks/").append(type).constData()).toMap();
+}
+
+QVariantList MpvObject::mediaInfo() const
+{
+    QVariantList sections;
+    if (m_idle)
+        return sections;
+
+    const auto num = [this](const char* name) { return getProperty(name).toDouble(); };
+    const auto text = [this](const char* name) { return getProperty(name).toString(); };
+
+    // --- Файл ---
+    QVariantList file;
+    const QString path = text("path");
+    const bool remote = path.contains(QLatin1String("://"));
+    const QString filename = text("filename");
+    if (m_mediaTitle != filename)
+        addRow(file, tr("Название"), m_mediaTitle);
+    if (remote) {
+        addRow(file, tr("Ссылка"), path);
+    } else {
+        const QFileInfo info(path);
+        addRow(file, tr("Файл"), info.fileName());
+        addRow(file, tr("Папка"), QDir::toNativeSeparators(info.absolutePath()));
+    }
+    const double size = num("file-size");
+    if (size > 0)
+        addRow(file, tr("Размер"), formatSize(size));
+    // mp4 mpv называет "mov,mp4,m4a,3gp,3g2,mj2"
+    QString format = text("file-format");
+    if (format.contains(QLatin1String("mp4")))
+        format = QStringLiteral("mp4");
+    addRow(file, tr("Контейнер"), format.toUpper());
+    if (m_duration > 0)
+        addRow(file, tr("Длительность"), formatDuration(m_duration));
+    if (size > 0 && m_duration > 0)
+        addRow(file, tr("Общий битрейт"), formatBitrate(size * 8 / m_duration));
+    if (!m_chapters.isEmpty())
+        addRow(file, tr("Главы"), QString::number(m_chapters.size()));
+    sections.append(section(tr("Файл"), QStringLiteral("folder"), file));
+
+    // --- Видео ---
+    const QVariantMap video = currentTrack("video");
+    if (!video.isEmpty()) {
+        QVariantList rows;
+        QString codec = codecName(video.value(QStringLiteral("codec")).toString());
+        const QString profile = video.value(QStringLiteral("codec-profile")).toString();
+        if (!profile.isEmpty())
+            codec += QStringLiteral(" · ") + profile;
+        addRow(rows, tr("Кодек"), codec);
+
+        const int w = video.value(QStringLiteral("demux-w")).toInt();
+        const int h = video.value(QStringLiteral("demux-h")).toInt();
+        if (w > 0 && h > 0)
+            addRow(rows, tr("Разрешение"), QStringLiteral("%1 × %2").arg(w).arg(h));
+
+        double fps = video.value(QStringLiteral("demux-fps")).toDouble();
+        if (fps <= 0)
+            fps = num("container-fps");
+        if (fps > 0)
+            addRow(rows, tr("Частота кадров"), tr("%1 к/с").arg(trimmedNumber(fps, 3)));
+
+        const double demuxBitrate = video.value(QStringLiteral("demux-bitrate")).toDouble();
+        const double liveBitrate = num("video-bitrate");
+        if (demuxBitrate > 0)
+            addRow(rows, tr("Битрейт"), formatBitrate(demuxBitrate));
+        else if (liveBitrate > 0)
+            addRow(rows, tr("Битрейт"), QStringLiteral("≈ ") + formatBitrate(liveBitrate));
+
+        const QVariantMap params = getProperty("video-params").toMap();
+        QStringList color;
+        QString pixfmt = params.value(QStringLiteral("hw-pixelformat")).toString();
+        if (pixfmt.isEmpty())
+            pixfmt = params.value(QStringLiteral("pixelformat")).toString();
+        const int depth = bitDepth(pixfmt);
+        if (depth > 0)
+            color << tr("%1 бит").arg(depth);
+        const QString gamma = params.value(QStringLiteral("gamma")).toString();
+        if (gamma == QLatin1String("pq"))
+            color << QStringLiteral("HDR10 (PQ)");
+        else if (gamma == QLatin1String("hlg"))
+            color << QStringLiteral("HDR (HLG)");
+        else if (!params.isEmpty())
+            color << QStringLiteral("SDR");
+        const QString primaries = params.value(QStringLiteral("primaries")).toString();
+        if (!primaries.isEmpty())
+            color << primaries.toUpper();
+        addRow(rows, tr("Цвет"), color.join(QStringLiteral(" · ")));
+
+        const QString hwdec = text("hwdec-current");
+        addRow(rows, tr("Декодирование"),
+               hwdec.isEmpty() || hwdec == QLatin1String("no") ? tr("Программное")
+                                                                 : tr("Аппаратное (%1)").arg(hwdec));
+        if (m_shaderPreset != QLatin1String("off"))
+            addRow(rows, QStringLiteral("Anime4K"), tr("Режим %1").arg(m_shaderPreset));
+        sections.append(section(tr("Видео"), QStringLiteral("video"), rows));
+    }
+
+    // --- Аудио ---
+    const QVariantMap audio = currentTrack("audio");
+    {
+        QVariantList rows;
+        if (audio.isEmpty()) {
+            addRow(rows, tr("Дорожка"), m_audioTracks.isEmpty() ? tr("Нет звука") : tr("Выключена"));
+        } else {
+            addRow(rows, tr("Дорожка"), trackName(audio));
+            addRow(rows, tr("Кодек"), codecName(audio.value(QStringLiteral("codec")).toString()));
+            const QString layout = audio.value(QStringLiteral("demux-channels")).toString();
+            const int channels = audio.value(QStringLiteral("demux-channel-count")).toInt();
+            if (channels > 0)
+                addRow(rows, tr("Каналы"), layout.isEmpty() || layout == QString::number(channels)
+                                               ? QString::number(channels)
+                                               : QStringLiteral("%1 (%2)").arg(channels).arg(layout));
+            const double rate = audio.value(QStringLiteral("demux-samplerate")).toDouble();
+            if (rate > 0)
+                addRow(rows, tr("Частота"), tr("%1 кГц").arg(trimmedNumber(rate / 1000, 1)));
+            const double demuxBitrate = audio.value(QStringLiteral("demux-bitrate")).toDouble();
+            const double liveBitrate = num("audio-bitrate");
+            if (demuxBitrate > 0)
+                addRow(rows, tr("Битрейт"), formatBitrate(demuxBitrate));
+            else if (liveBitrate > 0)
+                addRow(rows, tr("Битрейт"), QStringLiteral("≈ ") + formatBitrate(liveBitrate));
+            if (audio.value(QStringLiteral("external")).toBool())
+                addRow(rows, tr("Источник"), audio.value(QStringLiteral("external-filename")).toString());
+        }
+        if (m_audioTracks.size() > 1)
+            addRow(rows, tr("Всего дорожек"), QString::number(m_audioTracks.size()));
+        sections.append(section(tr("Аудио"), QStringLiteral("audio"), rows));
+    }
+
+    // --- Субтитры ---
+    if (!m_subtitleTracks.isEmpty()) {
+        QVariantList rows;
+        const QVariantMap sub = currentTrack("sub");
+        if (sub.isEmpty()) {
+            addRow(rows, tr("Дорожка"), tr("Выключены"));
+        } else {
+            addRow(rows, tr("Дорожка"), trackName(sub));
+            addRow(rows, tr("Формат"), codecName(sub.value(QStringLiteral("codec")).toString()));
+            if (sub.value(QStringLiteral("external")).toBool())
+                addRow(rows, tr("Источник"), sub.value(QStringLiteral("external-filename")).toString());
+        }
+        addRow(rows, tr("Всего дорожек"), QString::number(m_subtitleTracks.size()));
+        sections.append(section(tr("Субтитры"), QStringLiteral("subtitles"), rows));
+    }
+
+    return sections;
 }
 
 // ---------------------------------------------------------------------------

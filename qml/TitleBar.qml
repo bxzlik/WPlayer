@@ -10,10 +10,14 @@ Item {
     required property WindowChrome chrome
     property string title: ""
     property bool showSettings: false
+    // Кнопка «Инфо о видео» сразу за названием
+    property bool showInfo: false
     // Затемнение под заголовком (во время просмотра, поверх видео)
     property bool shaded: false
 
     signal settingsClicked()
+    signal historyClicked()
+    signal infoClicked()
 
     readonly property bool maximized: window.visibility === Window.Maximized
     readonly property bool fullscreen: window.visibility === Window.FullScreen
@@ -52,8 +56,9 @@ Item {
             font.weight: Font.Bold
         }
         Text {
+            id: titleText
             anchors.verticalCenter: parent.verticalCenter
-            width: parent.width - 24
+            width: Math.min(implicitWidth, parent.width - 24 - (infoButton.visible ? infoButton.width + 8 : 0))
             text: root.title
             color: Theme.text2
             opacity: root.window.active ? 1 : 0.6
@@ -61,6 +66,17 @@ Item {
             font.pixelSize: 12
             font.weight: Theme.bold
             elide: Text.ElideRight
+        }
+        IconButton {
+            id: infoButton
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.showInfo
+            implicitWidth: 26
+            implicitHeight: 26
+            iconName: "info"
+            iconSize: 15
+            restColor: Theme.text2
+            onClicked: root.infoClicked()
         }
     }
 
@@ -70,6 +86,12 @@ Item {
         anchors.right: parent.right
         anchors.rightMargin: 4
 
+        CaptionButton {
+            visible: root.showSettings
+            iconName: "history"
+            iconSize: 16
+            onClicked: root.historyClicked()
+        }
         CaptionButton {
             visible: root.showSettings
             iconName: "settings"

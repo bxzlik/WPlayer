@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
@@ -29,12 +31,20 @@ ApplicationWindow {
 
     // Пока true — интерфейс не прячется
     readonly property bool uiPinned: mpv.idle || mpv.paused || controls.busy || topBar.hovered
-                                     || urlDialog.visible || settingsPanel.visible
+                                     || urlDialog.visible || settingsPanel.visible || infoPanel.visible
+                                     || historyPanel.visible
 
     // Что сделать, когда yt-dlp вернёт прямую ссылку на аудио: "pair" | "add"
     property string pendingAudioAction: ""
     property string pendingVideo: ""
+    property string pendingAudioSource: ""  // страница, с которой yt-dlp берёт звук
     property var pendingSubtitles: []
+
+    // История: что открывается сейчас и что уже открыто ({ video, audio }).
+    // Пока nowPlaying пуст, позиция в историю не пишется.
+    property var loadingEntry: null
+    property var nowPlaying: null
+    property real resumedFrom: 0
 
     readonly property var audioExtensions: ["mka", "m4a", "aac", "mp3", "opus", "ogg", "oga", "flac", "wav", "ac3", "eac3", "dts", "thd"]
     readonly property var subtitleExtensions: ["ass", "ssa", "srt", "vtt", "sub", "sup"]
@@ -51,7 +61,21 @@ ApplicationWindow {
         property string lastVideoUrl: ""
         property string lastAudioUrl: ""
         property string accent: "#ffffff"
+        property bool resume: true
     }
+
+    History {
+        id: watchHistory
+    }
+
+    // Позиции пишутся на диск раз в несколько секунд и при закрытии
+    Timer {
+        interval: 5000
+        repeat: true
+        running: watchHistory.dirty
+        onTriggered: watchHistory.save()
+    }
+    onClosing: watchHistory.save()
 
     // Акцент из настроек — во всю тему
     Binding {
@@ -75,7 +99,7 @@ ApplicationWindow {
         if (settings.alang !== "") mpv.setMpvProperty("alang", settings.alang)
         if (settings.slang !== "") mpv.setMpvProperty("slang", settings.slang)
         if (settings.anime4kMode !== "off") mpv.setShaderPreset(settings.anime4kMode)
-        if (startupFile !== "") mpv.open(startupFile)
+        if (startupFile !== "") playMedia(startupFile)
         ready = true
     }
 
@@ -140,20 +164,43 @@ ApplicationWindow {
         speedBeforeHold = 0
     }
 
+    // Все открытия файлов идут сюда: запись в истории ищется по video + audio,
+    // и если в прошлый раз не досмотрели — продолжаем с того места.
+    // audioDirect — прямая ссылка на звук, полученная yt-dlp со страницы audio.
+    function playMedia(video, audio, audioDirect) {
+        const v = mpv.normalizedSource(video)
+        const a = audio ? mpv.normalizedSource(audio) : ""
+        if (v === "") return
+        nowPlaying = null
+        loadingEntry = { video: v, audio: a }
+        resumedFrom = settings.resume ? watchHistory.resumePosition(watchHistory.find(v, a)) : 0
+        if (a !== "") mpv.openWithAudio(v, audioDirect || a, resumedFrom)
+        else mpv.open(v, resumedFrom)
+    }
+
+    // Запись из истории: пара со страницей сайта снова идёт через yt-dlp
+    function openEntry(entry) {
+        if (entry.audio) openPair(entry.video, entry.audio, true)
+        else playMedia(entry.video)
+    }
+
     function openSource(url) {
         settings.lastVideoUrl = url
-        mpv.open(url)
+        playMedia(url)
     }
 
     // Видео из одной ссылки, звук из другой
-    function openPair(video, audio) {
-        settings.lastVideoUrl = video
-        settings.lastAudioUrl = audio
+    function openPair(video, audio, fromHistory) {
+        if (!fromHistory) {
+            settings.lastVideoUrl = video
+            settings.lastAudioUrl = audio
+        }
         if (downloader.isDirectMedia(audio)) {
-            mpv.openWithAudio(video, audio)
+            playMedia(video, audio)
         } else {
             pendingAudioAction = "pair"
             pendingVideo = video
+            pendingAudioSource = audio
             toast.show("Получаю аудиопоток через yt-dlp…")
             downloader.resolveAudio(audio)
         }
@@ -184,12 +231,11 @@ ApplicationWindow {
 
         if (video !== "") {
             pendingSubtitles = subs
-            if (audios.length > 0) mpv.openWithAudio(video, audios[0])
-            else mpv.open(video)
+            playMedia(video, audios.length > 0 ? audios[0] : "")
             return
         }
         if (mpv.idle) {
-            if (audios.length > 0) mpv.open(audios[0])
+            if (audios.length > 0) playMedia(audios[0])
             return
         }
         audios.forEach(a => mpv.addAudio(a))
@@ -215,13 +261,29 @@ ApplicationWindow {
         onFileLoaded: {
             win.pendingSubtitles.forEach(s => mpv.addSubtitle(s))
             win.pendingSubtitles = []
+
+            const entry = win.loadingEntry
+            win.loadingEntry = null
+            if (entry) {
+                watchHistory.touch(entry.video, entry.audio, mpv.mediaTitle, mpv.duration)
+                win.nowPlaying = entry
+            }
+            if (win.resumedFrom > 0) {
+                toast.show("Продолжено с " + Theme.formatTime(win.resumedFrom) + "  ·  Home — с начала")
+                win.resumedFrom = 0
+            }
+        }
+        onLoadingChanged: if (loading) win.nowPlaying = null
+        onPositionChanged: {
+            if (win.nowPlaying && !loading)
+                watchHistory.update(win.nowPlaying.video, win.nowPlaying.audio, position, duration, mediaTitle)
         }
     }
 
     YtDlp {
         id: downloader
         onAudioResolved: (source, direct) => {
-            if (win.pendingAudioAction === "pair") mpv.openWithAudio(win.pendingVideo, direct)
+            if (win.pendingAudioAction === "pair") win.playMedia(win.pendingVideo, win.pendingAudioSource, direct)
             else if (win.pendingAudioAction === "add") mpv.addAudio(direct)
             win.pendingAudioAction = ""
         }
@@ -339,6 +401,64 @@ ApplicationWindow {
                 font.family: Theme.font
                 font.pixelSize: 12
             }
+
+            // Недавние: столько строк, сколько влезает по высоте окна
+            Column {
+                id: recent
+                readonly property int rows: Math.max(0, Math.min(4, Math.floor((win.height - 330) / 58)))
+
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(460, win.width - 48)
+                topPadding: 22
+                spacing: 2
+                visible: rows > 0 && watchHistory.entries.length > 0
+
+                Item {
+                    width: parent.width
+                    height: 26
+
+                    Text {
+                        x: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Недавние"
+                        color: Theme.text2
+                        font.family: Theme.font
+                        font.pixelSize: 11
+                        font.weight: Theme.bold
+                        font.capitalization: Font.AllUppercase
+                        font.letterSpacing: 0.7
+                    }
+                    AbstractButton {
+                        id: allHistory
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        padding: 4
+                        rightPadding: 10
+                        hoverEnabled: true
+                        focusPolicy: Qt.NoFocus
+                        onClicked: historyPanel.open()
+                        background: Item {}
+                        contentItem: Text {
+                            text: "Вся история  ·  Ctrl+H"
+                            color: allHistory.hovered ? Theme.text : Theme.text2
+                            font.family: Theme.font
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+
+                Repeater {
+                    model: watchHistory.entries.slice(0, recent.rows)
+                    delegate: HistoryRow {
+                        required property var modelData
+                        width: recent.width
+                        entry: modelData
+                        watched: watchHistory.finished(modelData)
+                        onClicked: win.openEntry(modelData)
+                        onRemoveClicked: watchHistory.remove(modelData.video, modelData.audio)
+                    }
+                }
+            }
         }
     }
     BusyIndicator {
@@ -363,12 +483,15 @@ ApplicationWindow {
         chrome: windowChrome
         title: win.title
         showSettings: mpv.idle
+        showInfo: !mpv.idle
         shaded: !mpv.idle
         opacity: win.controlsVisible ? 1 : 0
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 200 } }
 
         onSettingsClicked: settingsPanel.open()
+        onHistoryClicked: historyPanel.open()
+        onInfoClicked: infoPanel.open()
     }
 
     WindowChrome {
@@ -492,7 +615,7 @@ ApplicationWindow {
             const file = selectedFile.toString()
             if (purpose === "audio") mpv.addAudio(file)
             else if (purpose === "subtitle") mpv.addSubtitle(file)
-            else mpv.open(file)
+            else win.playMedia(file)
         }
     }
 
@@ -515,6 +638,19 @@ ApplicationWindow {
         prefs: settings
     }
 
+    HistoryPanel {
+        id: historyPanel
+        fullscreen: win.isFullscreen
+        history: watchHistory
+        onEntryChosen: entry => win.openEntry(entry)
+    }
+
+    InfoPanel {
+        id: infoPanel
+        fullscreen: win.isFullscreen
+        player: mpv
+    }
+
     // ------------------------------------------------------------------
     // Горячие клавиши
     // ------------------------------------------------------------------
@@ -528,7 +664,8 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+Right"; enabled: win.keysEnabled; onActivated: mpv.seekRelative(1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: win.keysEnabled; onActivated: mpv.seekRelative(85) }
     Shortcut { sequence: "Ctrl+Left"; enabled: win.keysEnabled; onActivated: mpv.seekRelative(-85) }
-    Shortcut { sequence: "PgUp"; enabled: win.keysEnabled; onActivated: mpv.seekChapter(-1) }
+    Shortcut { sequence: "Home"; enabled: win.keysEnabled && !mpv.idle; onActivated: mpv.seek(0) }
+    Shortcut { sequence: "PgUp";enabled: win.keysEnabled; onActivated: mpv.seekChapter(-1) }
     Shortcut { sequence: "PgDown"; enabled: win.keysEnabled; onActivated: mpv.seekChapter(1) }
     // Клавиши-знаки в русской раскладке дают буквы: [ ] , . → Х Ъ Б Ю
     Shortcut { sequences: ["[", "Х"]; enabled: win.keysEnabled && !win.holding; onActivated: win.setSpeed(Theme.stepSpeed(mpv.speed, -1)) }
@@ -562,5 +699,11 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+O"; onActivated: fileDialog.openFor("video") }
     Shortcut { sequence: "Ctrl+L"; onActivated: urlDialog.openFor("single", settings.lastVideoUrl) }
     Shortcut { sequence: "Ctrl+Shift+L"; onActivated: urlDialog.openFor("pair", settings.lastVideoUrl, settings.lastAudioUrl) }
+    Shortcut {
+        sequence: "I"
+        enabled: win.keysEnabled && !mpv.idle
+        onActivated: infoPanel.visible ? infoPanel.close() : infoPanel.open()
+    }
+    Shortcut { sequence: "Ctrl+H"; onActivated: historyPanel.visible ? historyPanel.close() : historyPanel.open() }
     Shortcut { sequence: "Ctrl+,"; onActivated: settingsPanel.visible ? settingsPanel.close() : settingsPanel.open() }
 }

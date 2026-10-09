@@ -109,6 +109,27 @@ QtObject {
         return h > 0 ? h + ":" + pad2(m) + ":" + pad2(s) : m + ":" + pad2(s)
     }
 
+    // «только что», «5 мин назад», «3 ч назад», «вчера», «12 октября»
+    function timeAgo(ms) {
+        const minutes = Math.floor((Date.now() - ms) / 60000)
+        if (minutes < 1) return "только что"
+        if (minutes < 60) return minutes + " мин назад"
+        const then = new Date(ms)
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        if (then >= today) return Math.floor(minutes / 60) + " ч назад"
+        if (then >= today - 86400000) return "вчера"
+        return Qt.locale("ru_RU").toString(then, then.getFullYear() === today.getFullYear()
+                                                 ? "d MMMM" : "d MMMM yyyy")
+    }
+
+    // Последний кусок пути или ссылки — когда у записи нет названия
+    function sourceName(source) {
+        const s = source.split(/[?#]/)[0].replace(/[\\\/]+$/, "")
+        const name = s.substring(Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\")) + 1)
+        try { return decodeURIComponent(name) } catch (e) { return name }
+    }
+
     function formatDelay(seconds) {
         const ms = Math.round(seconds * 1000)
         return (ms > 0 ? "+" : ms < 0 ? "−" : "") + Math.abs(ms) + " мс"

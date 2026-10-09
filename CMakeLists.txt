@@ -95,6 +95,10 @@ set(WPLAYER_QML
     qml/ChoicePopup.qml
     qml/OpenUrlDialog.qml
     qml/SettingsPanel.qml
+    qml/InfoPanel.qml
+    qml/History.qml
+    qml/HistoryRow.qml
+    qml/HistoryPanel.qml
     qml/SettingCard.qml
     qml/Segmented.qml
     qml/ColorPicker.qml

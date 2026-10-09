@@ -226,10 +226,12 @@ Item {
                 }
             }
 
-            // Время ровно по центру; нажатие — длительность ↔ остаток
+            // Время ровно по центру; нажатие — длительность ↔ остаток.
+            // В узком окне сдвигается, чтобы не наезжать на иконки.
             AbstractButton {
                 id: timeButton
-                anchors.centerIn: parent
+                anchors.verticalCenter: parent.verticalCenter
+                x: Math.max(volumeRow.width + 8, Math.min((parent.width - width) / 2, iconRow.x - width - 8))
                 hoverEnabled: true
                 focusPolicy: Qt.NoFocus
                 padding: 4
@@ -256,6 +258,7 @@ Item {
 
             // Иконки справа
             Row {
+                id: iconRow
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
 

@@ -79,12 +79,16 @@ public:
     void setHwdec(bool enabled);
     void setAnime4kFast(bool fast);
 
-    // source — путь, file:///-URL или ссылка (сайты открываются через yt-dlp)
-    Q_INVOKABLE void open(const QString& source);
+    // source — путь, file:///-URL или ссылка (сайты открываются через yt-dlp).
+    // start > 0 — начать с этой секунды (продолжение просмотра)
+    Q_INVOKABLE void open(const QString& source, double start = 0);
     // Видео из video, звук из audio (через опцию mpv audio-files).
     // audio должен быть файлом или прямой ссылкой на поток — страницы сайтов
     // заранее разрешаются через YtDlp::resolveAudio.
-    Q_INVOKABLE void openWithAudio(const QString& video, const QString& audio);
+    Q_INVOKABLE void openWithAudio(const QString& video, const QString& audio, double start = 0);
+    // Источник в том виде, в каком его откроет mpv: file:///-URL и путь
+    // в кавычках → нативный путь. Ключ записи в истории.
+    Q_INVOKABLE QString normalizedSource(const QString& source) const;
     Q_INVOKABLE void addAudio(const QString& source);
     Q_INVOKABLE void addSubtitle(const QString& source);
 
@@ -99,6 +103,10 @@ public:
 
     // "off", "A", "B", "C", "AA", "BB", "CA"
     Q_INVOKABLE void setShaderPreset(const QString& preset);
+
+    // Сведения о текущем файле для окна «Инфо»:
+    // [{ title, icon, rows: [{ label, value }] }] — уже в читаемом виде
+    Q_INVOKABLE QVariantList mediaInfo() const;
 
     Q_INVOKABLE void command(const QStringList& args);
     Q_INVOKABLE void setMpvProperty(const QString& name, const QVariant& value);
@@ -139,7 +147,7 @@ private:
     void processEvents();
     void startRenderThread();
     void onRenderReady();
-    void loadFile(const QString& path);
+    void loadFile(const QString& path, double start = 0);
     void handleEvent(const mpv_event& event);
     void handlePropertyChange(const char* name, const QVariant& value);
     void updateTracks(const QVariantList& trackList);
@@ -149,6 +157,7 @@ private:
     void setLoading(bool loading);
 
     QVariant getProperty(const char* name) const;
+    QVariantMap currentTrack(const char* type) const;
     int setStringList(const char* name, const QStringList& items);
     QString lastErrorSuffix() const;
 
@@ -158,6 +167,7 @@ private:
     MpvRenderThread* m_renderThread = nullptr;
     bool m_renderReady = false;
     QString m_pendingLoad;  // loadfile, ждущий готовности отрисовки
+    double m_pendingStart = 0;
 
     QString m_defaultYtdlFormat;
     QString m_lastLogError;

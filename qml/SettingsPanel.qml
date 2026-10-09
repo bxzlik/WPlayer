@@ -267,6 +267,19 @@ Popup {
                     }
                 }
 
+                // --- История ---
+                SettingCard {
+                    Layout.fillWidth: true
+                    iconName: "history"
+                    title: "Продолжать с места"
+                    description: "Недосмотренное видео откроется там, где вы остановились. Home — к началу"
+                    on: root.prefs.resume
+                    trailing: UiSwitch {
+                        checked: root.prefs.resume
+                        onToggled: root.prefs.resume = checked
+                    }
+                }
+
                 // --- Языки ---
                 SettingCard {
                     Layout.fillWidth: true
@@ -372,10 +385,13 @@ Popup {
                             [["↑", "↓"], "Громкость"],
                             [["M"], "Без звука"],
                             [["F"], "Полный экран"],
+                            [["I"], "Инфо о видео"],
                             [["A"], "Следующая аудиодорожка"],
                             [["S"], "Следующие субтитры"],
                             [["Ctrl", "−"], "Задержка аудио −50 мс"],
                             [["Ctrl", "1…6"], "Anime4K, Ctrl+0 — выкл"],
+                            [["Home"], "К началу видео"],
+                            [["Ctrl", "H"], "История"],
                             [["Ctrl", "O"], "Открыть файл"],
                             [["Ctrl", "L"], "Открыть ссылку"]
                         ]
