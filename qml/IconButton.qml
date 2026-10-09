@@ -18,7 +18,9 @@ AbstractButton {
                               : (hovered || down) ? Theme.text
                               : restColor
 
-    implicitWidth: Math.max(36, (label !== "" ? labelText.implicitWidth + 16 : iconSize + 16))
+    readonly property real labelWidth: labelText.implicitWidth
+
+    implicitWidth: Math.max(36, (label !== "" ? labelWidth + 16 : iconSize + 16))
     implicitHeight: 36
     focusPolicy: Qt.NoFocus
     hoverEnabled: true

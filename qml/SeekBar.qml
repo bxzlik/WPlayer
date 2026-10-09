@@ -9,6 +9,18 @@ FlatSlider {
     property real playbackPosition: 0
     property real duration: 0
     property real cachedUntil: 0
+    // [{ title, time }] — у начала каждой главы на полосе разрыв
+    property var chapters: []
+
+    // Название главы, в которую попадает момент seconds
+    function chapterTitleAt(seconds) {
+        let title = ""
+        for (let i = 0; i < chapters.length; ++i) {
+            if (chapters[i].time > seconds) break
+            title = chapters[i].title
+        }
+        return title
+    }
 
     // exact = false во время перетаскивания (быстрый поиск по ключевым кадрам)
     signal seekRequested(real seconds, bool exact)
@@ -52,6 +64,19 @@ FlatSlider {
             radius: height / 2
             color: root.fillColor
         }
+
+        // Разрывы на границах глав (первая глава с 0:00 разрыва не даёт)
+        Repeater {
+            model: root.duration > 0 ? root.chapters : []
+            delegate: Rectangle {
+                required property var modelData
+                visible: modelData.time > 0 && modelData.time < root.duration
+                x: modelData.time / root.duration * parent.width - width / 2
+                width: 2
+                height: parent.height
+                color: Qt.rgba(0, 0, 0, 0.75)
+            }
+        }
     }
 
     handle: Item {}
@@ -63,23 +88,45 @@ FlatSlider {
         readonly property real hx: root.pressed ? root.visualPosition * root.width
                                                 : Math.max(0, Math.min(root.hoverX, root.width))
 
+        readonly property real seconds: hx / Math.max(1, root.width) * root.duration
+        readonly property string chapterTitle: root.chapterTitleAt(seconds)
+
         visible: (root.hovering || root.pressed) && root.duration > 0
-        width: 64
-        height: tipText.implicitHeight + 8
+        width: Math.max(64, Math.min(260, 16 + Math.max(timeText.implicitWidth,
+                                                         chapterText.visible ? chapterText.implicitWidth : 0)))
+        height: tipColumn.implicitHeight + 8
         x: Math.max(0, Math.min(hx - width / 2, root.width - width))
         y: -height - 2
         radius: 6
         color: Qt.rgba(0, 0, 0, 0.82)
 
-        Text {
-            id: tipText
+        Column {
+            id: tipColumn
             anchors.centerIn: parent
-            text: Theme.formatTime(tip.hx / Math.max(1, root.width) * root.duration)
-            color: Theme.text
-            font.family: Theme.font
-            font.pixelSize: 11
-            font.weight: Theme.bold
-            font.features: { "tnum": 1 }
+            width: tip.width - 16
+
+            Text {
+                id: chapterText
+                width: parent.width
+                visible: tip.chapterTitle !== ""
+                horizontalAlignment: Text.AlignHCenter
+                text: tip.chapterTitle
+                color: Theme.text2
+                font.family: Theme.font
+                font.pixelSize: 11
+                elide: Text.ElideRight
+            }
+            Text {
+                id: timeText
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: Theme.formatTime(tip.seconds)
+                color: Theme.text
+                font.family: Theme.font
+                font.pixelSize: 11
+                font.weight: Theme.bold
+                font.features: { "tnum": 1 }
+            }
         }
     }
 }

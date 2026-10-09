@@ -32,6 +32,10 @@ class MpvObject : public QQuickItem
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(bool muted READ muted WRITE setMuted NOTIFY mutedChanged)
     Q_PROPERTY(double audioDelay READ audioDelay WRITE setAudioDelay NOTIFY audioDelayChanged)
+    Q_PROPERTY(double speed READ speed WRITE setSpeed NOTIFY speedChanged)
+    // Главы файла: [{ title, time }] и номер текущей (-1 — до первой или нет глав)
+    Q_PROPERTY(QVariantList chapters READ chapters NOTIFY chaptersChanged)
+    Q_PROPERTY(int chapter READ chapter NOTIFY chapterChanged)
     Q_PROPERTY(bool hwdec READ hwdec WRITE setHwdec NOTIFY hwdecChanged)
     Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY tracksChanged)
     Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY tracksChanged)
@@ -56,6 +60,9 @@ public:
     double volume() const { return m_volume; }
     bool muted() const { return m_muted; }
     double audioDelay() const { return m_audioDelay; }
+    double speed() const { return m_speed; }
+    QVariantList chapters() const { return m_chapters; }
+    int chapter() const { return m_chapter; }
     bool hwdec() const { return m_hwdec; }
     QVariantList audioTracks() const { return m_audioTracks; }
     QVariantList subtitleTracks() const { return m_subtitleTracks; }
@@ -68,6 +75,7 @@ public:
     void setVolume(double volume);
     void setMuted(bool muted);
     void setAudioDelay(double seconds);
+    void setSpeed(double speed);
     void setHwdec(bool enabled);
     void setAnime4kFast(bool fast);
 
@@ -83,6 +91,9 @@ public:
     Q_INVOKABLE void togglePause();
     Q_INVOKABLE void seek(double seconds, bool exact = true);
     Q_INVOKABLE void seekRelative(double seconds);
+    // ±1 глава, как PgUp/PgDn в mpv: назад в первые секунды главы — к
+    // предыдущей, позже — к началу текущей; вперёд с последней — в конец файла
+    Q_INVOKABLE void seekChapter(int delta);
     Q_INVOKABLE void setAudioTrack(int id);     // -1 = выключить
     Q_INVOKABLE void setSubtitleTrack(int id);  // -1 = выключить
 
@@ -109,6 +120,9 @@ signals:
     void volumeChanged();
     void mutedChanged();
     void audioDelayChanged();
+    void speedChanged();
+    void chaptersChanged();
+    void chapterChanged();
     void hwdecChanged();
     void tracksChanged();
     void audioIdChanged();
@@ -129,6 +143,7 @@ private:
     void handleEvent(const mpv_event& event);
     void handlePropertyChange(const char* name, const QVariant& value);
     void updateTracks(const QVariantList& trackList);
+    void updateChapters(const QVariantList& chapterList);
     void selectExternalAudio(const QString& source);
     void prepareLoad(const QString& source, const QStringList& audioFiles, const QString& ytdlFormat);
     void setLoading(bool loading);
@@ -159,6 +174,9 @@ private:
     double m_volume = 100;
     bool m_muted = false;
     double m_audioDelay = 0;
+    double m_speed = 1;
+    QVariantList m_chapters;
+    int m_chapter = -1;
     bool m_hwdec = true;
     QVariantList m_audioTracks;
     QVariantList m_subtitleTracks;

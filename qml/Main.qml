@@ -118,6 +118,28 @@ ApplicationWindow {
         toast.show("Задержка аудио " + Theme.formatDelay(mpv.audioDelay))
     }
 
+    function setSpeed(speed) {
+        mpv.speed = speed
+        toast.show("Скорость " + Theme.formatSpeed(speed))
+    }
+
+    // Удержание кнопки мыши на кадре — ускорение до Theme.holdSpeed, пока держат
+    // (как в anibloom). Пауза при этом не переключается.
+    property real speedBeforeHold: 0   // 0 — удержания нет
+    readonly property bool holding: speedBeforeHold > 0
+
+    function startHold() {
+        if (mpv.idle || holding) return
+        speedBeforeHold = mpv.speed
+        mpv.speed = Theme.holdSpeed
+    }
+
+    function endHold() {
+        if (!holding) return
+        mpv.speed = speedBeforeHold
+        speedBeforeHold = 0
+    }
+
     function openSource(url) {
         settings.lastVideoUrl = url
         mpv.open(url)
@@ -211,16 +233,43 @@ ApplicationWindow {
     }
 
     MouseArea {
+        id: frameMouse
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         cursorShape: win.controlsVisible ? Qt.ArrowCursor : Qt.BlankCursor
 
+        // Долгое нажатие — удержание 2×; его отпускание не клик.
+        // Свой таймер, а не pressAndHold: тот не срабатывает, если за время
+        // нажатия MouseArea потеряла hover.
+        property bool held: false
+
+        Timer {
+            id: holdTimer
+            interval: 350
+            onTriggered: {
+                frameMouse.held = true
+                win.startHold()
+            }
+        }
+
         onPositionChanged: win.poke()
+        onPressed: {
+            held = false
+            holdTimer.restart()
+        }
+        onReleased: {
+            holdTimer.stop()
+            win.endHold()
+        }
+        onCanceled: {
+            holdTimer.stop()
+            win.endHold()
+        }
         // Пауза — сразу по первому клику, без ожидания возможного второго.
         // Если клик оказался двойным, второй возвращает паузу как была
         // и переключает полный экран (так же ведут себя mpv и MPC).
-        onClicked: if (!mpv.idle) mpv.togglePause()
+        onClicked: if (!held && !mpv.idle) mpv.togglePause()
         onDoubleClicked: {
             if (!mpv.idle) mpv.togglePause()
             win.toggleFullscreen()
@@ -377,6 +426,40 @@ ApplicationWindow {
         }
     }
 
+    // Плашка «2×», пока держат кнопку мыши
+    Rectangle {
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: 56
+        width: holdRow.implicitWidth + 28
+        height: 34
+        radius: height / 2
+        color: Qt.rgba(0, 0, 0, 0.6)
+        opacity: win.holding ? 1 : 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+
+        Row {
+            id: holdRow
+            anchors.centerIn: parent
+            spacing: 8
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: Theme.formatSpeed(Theme.holdSpeed)
+                color: Theme.text
+                font.family: Theme.font
+                font.pixelSize: 14
+                font.weight: Theme.bold
+            }
+            Icon {
+                anchors.verticalCenter: parent.verticalCenter
+                iconName: "fast-forward"
+                size: 16
+                color: Theme.text
+            }
+        }
+    }
+
     Toast {
         id: toast
         anchors.horizontalCenter: parent.horizontalCenter
@@ -445,8 +528,14 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+Right"; enabled: win.keysEnabled; onActivated: mpv.seekRelative(1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: win.keysEnabled; onActivated: mpv.seekRelative(85) }
     Shortcut { sequence: "Ctrl+Left"; enabled: win.keysEnabled; onActivated: mpv.seekRelative(-85) }
-    Shortcut { sequence: ","; enabled: win.keysEnabled; onActivated: mpv.command(["frame-back-step"]) }
-    Shortcut { sequence: "."; enabled: win.keysEnabled; onActivated: mpv.command(["frame-step"]) }
+    Shortcut { sequence: "PgUp"; enabled: win.keysEnabled; onActivated: mpv.seekChapter(-1) }
+    Shortcut { sequence: "PgDown"; enabled: win.keysEnabled; onActivated: mpv.seekChapter(1) }
+    // Клавиши-знаки в русской раскладке дают буквы: [ ] , . → Х Ъ Б Ю
+    Shortcut { sequences: ["[", "Х"]; enabled: win.keysEnabled && !win.holding; onActivated: win.setSpeed(Theme.stepSpeed(mpv.speed, -1)) }
+    Shortcut { sequences: ["]", "Ъ"]; enabled: win.keysEnabled && !win.holding; onActivated: win.setSpeed(Theme.stepSpeed(mpv.speed, 1)) }
+    Shortcut { sequence: "Backspace"; enabled: win.keysEnabled && !win.holding; onActivated: win.setSpeed(1) }
+    Shortcut { sequences: [",", "Б"]; enabled: win.keysEnabled; onActivated: mpv.command(["frame-back-step"]) }
+    Shortcut { sequences: [".", "Ю"]; enabled: win.keysEnabled; onActivated: mpv.command(["frame-step"]) }
     Shortcut { sequence: "Up"; enabled: win.keysEnabled; onActivated: win.changeVolume(5) }
     Shortcut { sequence: "Down"; enabled: win.keysEnabled; onActivated: win.changeVolume(-5) }
     Shortcut {

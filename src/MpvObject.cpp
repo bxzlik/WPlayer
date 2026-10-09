@@ -177,6 +177,7 @@ MpvObject::MpvObject(QQuickItem* parent)
     static const char* const observed[] = {
         "idle-active", "media-title", "time-pos", "duration", "pause", "volume", "mute",
         "audio-delay", "paused-for-cache", "track-list", "aid", "sid", "demuxer-cache-time",
+        "speed", "chapter-list", "chapter",
     };
     for (const char* name : observed)
         mpv_observe_property(handle, 0, name, MPV_FORMAT_NODE);
@@ -361,6 +362,12 @@ void MpvObject::handlePropertyChange(const char* name, const QVariant& value)
         assign(this, m_muted, value.toBool(), &MpvObject::mutedChanged);
     } else if (std::strcmp(name, "audio-delay") == 0) {
         assign(this, m_audioDelay, value.toDouble(), &MpvObject::audioDelayChanged);
+    } else if (std::strcmp(name, "speed") == 0) {
+        assign(this, m_speed, value.isValid() ? value.toDouble() : 1.0, &MpvObject::speedChanged);
+    } else if (std::strcmp(name, "chapter-list") == 0) {
+        updateChapters(value.toList());
+    } else if (std::strcmp(name, "chapter") == 0) {
+        assign(this, m_chapter, value.isValid() ? value.toInt() : -1, &MpvObject::chapterChanged);
     } else if (std::strcmp(name, "media-title") == 0) {
         assign(this, m_mediaTitle, value.toString(), &MpvObject::mediaTitleChanged);
     } else if (std::strcmp(name, "idle-active") == 0) {
@@ -423,6 +430,25 @@ void MpvObject::updateTracks(const QVariantList& trackList)
     m_audioTracks = audio;
     m_subtitleTracks = subs;
     emit tracksChanged();
+}
+
+void MpvObject::updateChapters(const QVariantList& chapterList)
+{
+    QVariantList chapters;
+    for (const QVariant& item : chapterList) {
+        const QVariantMap chapter = item.toMap();
+        QString title = chapter.value(QStringLiteral("title")).toString();
+        if (title.isEmpty())
+            title = tr("Глава %1").arg(chapters.size() + 1);
+        chapters.append(QVariantMap{
+            {QStringLiteral("title"), title},
+            {QStringLiteral("time"), chapter.value(QStringLiteral("time")).toDouble()},
+        });
+    }
+    if (chapters == m_chapters)
+        return;
+    m_chapters = chapters;
+    emit chaptersChanged();
 }
 
 void MpvObject::selectExternalAudio(const QString& source)
@@ -574,6 +600,11 @@ void MpvObject::seekRelative(double seconds)
     command({QStringLiteral("seek"), QString::number(seconds, 'f', 3), QStringLiteral("relative+exact")});
 }
 
+void MpvObject::seekChapter(int delta)
+{
+    command({QStringLiteral("add"), QStringLiteral("chapter"), QString::number(delta)});
+}
+
 void MpvObject::setAudioTrack(int id)
 {
     const QByteArray value = id < 0 ? QByteArray("no") : QByteArray::number(id);
@@ -606,6 +637,11 @@ void MpvObject::setMuted(bool muted)
 void MpvObject::setAudioDelay(double seconds)
 {
     mpv_set_property(m_mpv.get(), "audio-delay", MPV_FORMAT_DOUBLE, &seconds);
+}
+
+void MpvObject::setSpeed(double speed)
+{
+    mpv_set_property(m_mpv.get(), "speed", MPV_FORMAT_DOUBLE, &speed);
 }
 
 void MpvObject::setHwdec(bool enabled)

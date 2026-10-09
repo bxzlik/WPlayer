@@ -27,7 +27,7 @@ Item {
     readonly property bool busy: bottomHover.hovered || centerHover.hovered
                                  || seekBar.pressed || volumeSlider.pressed
                                  || audioPopup.opened || subtitlePopup.opened
-                                 || shaderPopup.opened || delayPopup.opened
+                                 || shaderPopup.opened || delayPopup.opened || speedPopup.opened
 
     // Затемнение у нижнего края (как _EdgeScrim в anibloom: от 62% высоты до
     // 72% черноты у края). Верх затемняет тайтлбар.
@@ -71,17 +71,27 @@ Item {
 
     // Иконка ряда над полосой: 34 px, значок 18 px, без подложки и подсказок
     component BarButton: IconButton {
-        implicitWidth: 34
+        implicitWidth: label !== "" ? Math.max(34, labelWidth + 16) : 34
         implicitHeight: 34
         iconSize: 18
     }
 
     // --- Центр кадра ---
+    // По краям — предыдущая / следующая глава (только если они есть в файле),
+    // как кнопки глав в OSC mpv
     Row {
         anchors.centerIn: parent
         spacing: 26
 
         HoverHandler { id: centerHover }
+
+        CenterButton {
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.player.chapters.length > 0
+            iconName: "chapter-prev"
+            iconSize: 20
+            onClicked: root.player.seekChapter(-1)
+        }
 
         CenterButton {
             anchors.verticalCenter: parent.verticalCenter
@@ -114,6 +124,14 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             iconName: "forward"
             onClicked: root.player.seekRelative(10)
+        }
+
+        CenterButton {
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.player.chapters.length > 0
+            iconName: "chapter-next"
+            iconSize: 20
+            onClicked: root.player.seekChapter(1)
         }
     }
 
@@ -241,6 +259,19 @@ Item {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
 
+                // Пропуск опенинга — на виду, а не в меню (как в anibloom)
+                BarButton {
+                    iconName: "skip-op"
+                    onClicked: root.player.seekRelative(85)
+                }
+                BarButton {
+                    id: speedButton
+                    readonly property bool changed: Math.abs(root.player.speed - 1) >= 0.001
+                    iconName: "speed"
+                    label: changed ? Theme.formatSpeed(root.player.speed) : ""
+                    active: changed
+                    onClicked: speedPopup.toggleAbove(speedButton)
+                }
                 BarButton {
                     id: delayButton
                     readonly property bool shifted: Math.abs(root.player.audioDelay) >= 0.0005
@@ -284,6 +315,7 @@ Item {
             playbackPosition: root.player.position
             duration: root.player.duration
             cachedUntil: root.player.cachedUntil
+            chapters: root.player.chapters
             onSeekRequested: (seconds, exact) => root.player.seek(seconds, exact)
         }
     }
@@ -331,6 +363,17 @@ Item {
             selected: m.value === root.player.shaderPreset
         }))
         onChosen: value => root.player.setShaderPreset(value)
+    }
+
+    ChoicePopup {
+        id: speedPopup
+        title: "Скорость"
+        width: 200
+        model: Theme.speeds.map(s => ({
+            value: s, label: s === 1 ? "Обычная" : Theme.formatSpeed(s),
+            selected: Math.abs(s - root.player.speed) < 0.001
+        }))
+        onChosen: value => root.player.speed = value
     }
 
     FloatingPopup {

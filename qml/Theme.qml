@@ -72,6 +72,27 @@ QtObject {
         return anime4kModes[0]
     }
 
+    // --- Скорость ---
+    readonly property var speeds: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+    readonly property real holdSpeed: 2
+
+    function formatSpeed(speed) {
+        return (Math.round(speed * 100) / 100) + "×"
+    }
+
+    // Соседняя ступень из speeds (direction ±1); со скорости между
+    // ступенями — к ближайшей в эту сторону
+    function stepSpeed(speed, direction) {
+        if (direction > 0) {
+            for (let i = 0; i < speeds.length; ++i)
+                if (speeds[i] > speed + 0.001) return speeds[i]
+            return speeds[speeds.length - 1]
+        }
+        for (let j = speeds.length - 1; j >= 0; --j)
+            if (speeds[j] < speed - 0.001) return speeds[j]
+        return speeds[0]
+    }
+
     function volumeIcon(volume, muted) {
         if (muted || volume <= 0) return "muted"
         return volume < 50 ? "volume-low" : "volume"
