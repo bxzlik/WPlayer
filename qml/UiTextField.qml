@@ -31,6 +31,19 @@ T.TextField {
         Behavior on border.color { ColorAnimation { duration: 150 } }
     }
 
+    // Правая кнопка — меню «Вырезать / Копировать / Вставить»
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        onTapped: eventPoint => {
+            root.forceActiveFocus()
+            menu.openAt(root, eventPoint.position)
+        }
+    }
+
+    TextMenu {
+        id: menu
+    }
+
     Text {
         x: root.leftPadding
         width: root.width - root.leftPadding - root.rightPadding

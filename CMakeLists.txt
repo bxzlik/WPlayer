@@ -106,6 +106,7 @@ set(WPLAYER_QML
     qml/ModalDialog.qml
     qml/UiSwitch.qml
     qml/UiTextField.qml
+    qml/TextMenu.qml
     qml/Icon.qml
     qml/Toast.qml
     qml/TitleBar.qml
