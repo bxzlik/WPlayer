@@ -75,7 +75,7 @@ jobs:
             if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
             $env:PATH = "${env:ProgramFiles(x86)}\NSIS;$env:PATH"
           }
-          makensis /V2 "/DVERSION=$v" "/DSRC=$PWD\dist" "/DOUTFILE=$PWD\out\WPlayer-$v.exe" installer/WPlayer.nsi
+          makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$v" "/DSRC=$PWD\dist" "/DOUTFILE=$PWD\out\WPlayer-$v.exe" installer/WPlayer.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis завершился с кодом $LASTEXITCODE" }
 
           # Установщик .msi (CPack + WiX 3)

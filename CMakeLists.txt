@@ -235,6 +235,9 @@ set(CPACK_WIX_PROPERTY_MSIINSTALLPERUSER "1")
 set(CPACK_WIX_PROGRAM_MENU_FOLDER ".")
 set(CPACK_WIX_CULTURES "ru-RU")
 set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://github.com/bxzlik/WPlayer")
+# «Открыть с помощью» и «Приложения по умолчанию» для видеофайлов
+set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_SOURCE_DIR}/installer/FileAssociations.wxs")
+set(CPACK_WIX_PATCH_FILE "${CMAKE_SOURCE_DIR}/installer/wix-patch.xml")
 
 set(CPACK_GENERATOR "WIX")
 include(CPack)

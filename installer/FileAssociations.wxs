@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Регистрация WPlayer для видеофайлов в .msi (CPACK_WIX_EXTRA_SOURCES в CMakeLists.txt;
+  в установку компонент добавляет installer/wix-patch.xml).
+  То же самое для .exe — в installer/WPlayer.nsi; при изменении правьте оба.
+  Только «Открыть с помощью» и «Приложения по умолчанию»: программой по умолчанию
+  Windows разрешает назначить только самому пользователю.
+  Всё удаляется вместе с программой.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?define ProgId = "WPlayer.Video" ?>
+  <?define Caps = "Software\WPlayer\Capabilities" ?>
+  <?define Exe = "[INSTALL_ROOT]WPlayer.exe" ?>
+
+  <Fragment>
+    <DirectoryRef Id="INSTALL_ROOT">
+      <!-- GUID не менять: по нему Windows узнаёт компонент при обновлении -->
+      <Component Id="CM_WPLAYER_FILE_ASSOCIATIONS" Guid="D108CAD9-3E44-4CDF-9CB8-7C5475040CD9">
+        <!-- «Параметры → Приложения по умолчанию → WPlayer» -->
+        <RegistryValue Root="HKCU" Key="$(var.Caps)" Name="ApplicationName" Value="WPlayer" Type="string" KeyPath="yes"/>
+        <RegistryValue Root="HKCU" Key="$(var.Caps)" Name="ApplicationDescription" Value="Видеоплеер для аниме на основе mpv" Type="string"/>
+        <RegistryValue Root="HKCU" Key="$(var.Caps)" Name="ApplicationIcon" Value="$(var.Exe),0" Type="string"/>
+        <RegistryValue Root="HKCU" Key="Software\RegisteredApplications" Name="WPlayer" Value="$(var.Caps)" Type="string"/>
+
+        <!-- Тип файла WPlayer: значок и команда открытия -->
+        <RegistryValue Root="HKCU" Key="Software\Classes\$(var.ProgId)" Value="Видеофайл" Type="string"/>
+        <RegistryValue Root="HKCU" Key="Software\Classes\$(var.ProgId)\DefaultIcon" Value="$(var.Exe),0" Type="string"/>
+        <RegistryValue Root="HKCU" Key="Software\Classes\$(var.ProgId)\shell\open\command" Value="&quot;$(var.Exe)&quot; &quot;%1&quot;" Type="string"/>
+
+        <!-- Название и команда в списке «Открыть с помощью» -->
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\WPlayer.exe" Name="FriendlyAppName" Value="WPlayer" Type="string"/>
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\WPlayer.exe\shell\open\command" Value="&quot;$(var.Exe)&quot; &quot;%1&quot;" Type="string"/>
+
+        <!-- Запуск по имени: «Win+R → WPlayer», start WPlayer из консоли и других программ -->
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\WPlayer.exe" Value="$(var.Exe)" Type="string"/>
+        <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\WPlayer.exe" Name="Path" Value="[INSTALL_ROOT]" Type="string"/>
+
+        <!-- Те же расширения, что в фильтре «Открыть файл» (Main.qml) и в автозагрузке папки (MpvObject.cpp) -->
+        <?foreach Ext in mkv;mp4;avi;webm;mov;m2ts;ts;flv;wmv;m4v ?>
+        <RegistryValue Root="HKCU" Key="Software\Classes\.$(var.Ext)\OpenWithProgids" Name="$(var.ProgId)" Value="" Type="string"/>
+        <RegistryValue Root="HKCU" Key="Software\Classes\Applications\WPlayer.exe\SupportedTypes" Name=".$(var.Ext)" Value="" Type="string"/>
+        <RegistryValue Root="HKCU" Key="$(var.Caps)\FileAssociations" Name=".$(var.Ext)" Value="$(var.ProgId)" Type="string"/>
+        <?endforeach ?>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

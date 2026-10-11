@@ -1,0 +1,6 @@
+<!-- CPACK_WIX_PATCH_FILE: без ссылки из основной фичи WiX выкидывает компонент из FileAssociations.wxs -->
+<CPackWiXPatch>
+  <CPackWiXFragment Id="#PRODUCTFEATURE">
+    <ComponentRef Id="CM_WPLAYER_FILE_ASSOCIATIONS"/>
+  </CPackWiXFragment>
+</CPackWiXPatch>

@@ -19,6 +19,7 @@ A Windows desktop player built on mpv: local files and links, Anime4K upscaling 
 | Feature | Notes |
 | --- | --- |
 | 🎬 **Files and links** | Local files, direct links and site pages via yt-dlp |
+| 📂 **Open from Explorer** | The installer adds WPlayer to “Open with” and “Default apps” for mkv, mp4 and other videos |
 | 🎧 **Video + audio** | Picture from one link, sound from another — for dubs from a different source, with audio delay control |
 | 📜 **History** | Recently watched on the start screen, resume where you left off |
 | 📋 **Queue** | Several files at once, next episodes from the folder, auto-advance, drag to reorder |
