@@ -531,6 +531,12 @@ void MpvObject::prepareFile()
         setLocal("referrer", url.adjusted(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment
                                           | QUrl::RemoveUserInfo).toString() + QLatin1Char('/'));
 
+    // Заданное явно (из командной строки или истории) важнее: некоторые CDN
+    // требуют Referer страницы сайта, а не своего домена
+    const QVariantMap options = m_sourceOptions.value(path);
+    for (auto it = options.cbegin(); it != options.cend(); ++it)
+        setLocal(it.key().toUtf8().constData(), it.value().toString());
+
     if (!audio.isEmpty()) {
         // Звук берётся из второй ссылки — с сайта качаем только видео.
         // audio-delay не сбрасываем: у пары релизов сдвиг обычно одинаковый.
@@ -556,6 +562,22 @@ void MpvObject::prepareFile()
 void MpvObject::setStartPosition(double seconds)
 {
     m_hookStart = seconds;
+}
+
+void MpvObject::setSourceOptions(const QString& source, const QVariantMap& options)
+{
+    const QString path = normalizeSource(source);
+    if (path.isEmpty())
+        return;
+    if (options.isEmpty())
+        m_sourceOptions.remove(path);
+    else
+        m_sourceOptions.insert(path, options);
+}
+
+QVariantMap MpvObject::sourceOptions(const QString& source) const
+{
+    return m_sourceOptions.value(normalizeSource(source));
 }
 
 QString MpvObject::normalizedSource(const QString& source) const

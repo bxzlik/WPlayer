@@ -22,8 +22,10 @@ ApplicationWindow {
     Material.accent: Theme.accent
     Material.background: Theme.surface
 
-    // Файл из командной строки (передаётся из main.cpp)
+    // Файл из командной строки, его опции mpv и --start (передаются из main.cpp)
     property string startupFile: ""
+    property var startupOptions: ({})
+    property real startupStart: 0
 
     property bool controlsVisible: true
     property int restoreVisibility: Window.Windowed
@@ -102,7 +104,10 @@ ApplicationWindow {
         if (settings.alang !== "") mpv.setMpvProperty("alang", settings.alang)
         if (settings.slang !== "") mpv.setMpvProperty("slang", settings.slang)
         if (settings.anime4kMode !== "off") mpv.setShaderPreset(settings.anime4kMode)
-        if (startupFile !== "") playMedia(startupFile)
+        if (startupFile !== "") {
+            mpv.setSourceOptions(startupFile, startupOptions)
+            playMedia(startupFile)
+        }
         ready = true
     }
 
@@ -219,13 +224,22 @@ ApplicationWindow {
     function startingFile(path) {
         const audio = pairAudioPages[path] || ""
         nowPlaying = null
-        loadingEntry = { video: path, audio: audio }
+        loadingEntry = { video: path, audio: audio, options: mpv.sourceOptions(path) }
         resumedFrom = settings.resume ? watchHistory.resumePosition(watchHistory.find(path, audio)) : 0
-        if (resumedFrom > 0) mpv.setStartPosition(resumedFrom)
+        // --start (например, где остановились в браузере) важнее сохранённой позиции
+        if (startupStart > 0 && path === mpv.normalizedSource(startupFile)) {
+            mpv.setStartPosition(startupStart)
+            startupStart = 0
+            resumedFrom = 0
+        } else if (resumedFrom > 0) {
+            mpv.setStartPosition(resumedFrom)
+        }
     }
 
-    // Запись из истории: пара со страницей сайта снова идёт через yt-dlp
+    // Запись из истории: пара со страницей сайта снова идёт через yt-dlp.
+    // Опции из командной строки (Referer и т. п.) — те же, что в первый раз
     function openEntry(entry) {
+        if (entry.options) mpv.setSourceOptions(entry.video, entry.options)
         if (entry.audio) openPair(entry.video, entry.audio, true)
         else playMedia(entry.video)
     }
@@ -317,7 +331,7 @@ ApplicationWindow {
             const entry = win.loadingEntry
             win.loadingEntry = null
             if (entry) {
-                watchHistory.touch(entry.video, entry.audio, mpv.mediaTitle, mpv.duration)
+                watchHistory.touch(entry.video, entry.audio, mpv.mediaTitle, mpv.duration, entry.options)
                 win.nowPlaying = entry
             }
             if (win.resumedFrom > 0) {

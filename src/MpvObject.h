@@ -103,6 +103,11 @@ public:
     Q_INVOKABLE void enqueueWithAudio(const QString& video, const QString& audio);
     // Вызывается из обработчика fileStarting: начать файл с этой секунды
     Q_INVOKABLE void setStartPosition(double seconds);
+    // Опции mpv только для этого источника ({ "referrer": …, "user-agent": …,
+    // "force-media-title": … }) — ставятся при каждом его открытии из очереди
+    // поверх автоматических
+    Q_INVOKABLE void setSourceOptions(const QString& source, const QVariantMap& options);
+    Q_INVOKABLE QVariantMap sourceOptions(const QString& source) const;
     // Источник в том виде, в каком его откроет mpv: file:///-URL и путь
     // в кавычках → нативный путь. Ключ записи в истории.
     Q_INVOKABLE QString normalizedSource(const QString& source) const;
@@ -207,6 +212,7 @@ private:
     // Пары «видео + аудио»: путь видео в очереди → звук из второй ссылки
     QHash<QString, QString> m_pairAudio;
     QString m_currentPairAudio;  // звук текущего файла, выбрать после загрузки
+    QHash<QString, QVariantMap> m_sourceOptions;  // путь в очереди → setSourceOptions
     double m_hookStart = 0;
 
     bool m_idle = true;

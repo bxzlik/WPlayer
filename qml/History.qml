@@ -7,7 +7,9 @@ import QtCore
 QtObject {
     id: root
 
-    // [{ video, audio, title, position, duration, watchedAt }]
+    // [{ video, audio, title, position, duration, watchedAt, options }]
+    // options — опции mpv источника из командной строки (referrer, user-agent,
+    // force-media-title): без них ссылка из истории может не открыться
     property var entries: []
     readonly property int limit: 100
     // Позиции меняются постоянно — на диск их пишет save() по таймеру
@@ -50,12 +52,14 @@ QtObject {
         return entry.position
     }
 
-    // Файл открылся — запись наверх
-    function touch(video, audio, title, duration) {
+    // Файл открылся — запись наверх. Если options нет (ссылку открыли
+    // вручную), сохранённые остаются для следующего открытия из истории
+    function touch(video, audio, title, duration, options) {
         const i = indexOf(video, audio)
         const entry = i >= 0 ? entries[i] : { video: video, audio: audio || "", position: 0 }
         if (title !== "") entry.title = title
         if (duration > 0) entry.duration = duration
+        if (options && Object.keys(options).length > 0) entry.options = options
         entry.watchedAt = Date.now()
         const next = entries.slice()
         if (i >= 0) next.splice(i, 1)
